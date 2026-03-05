@@ -5,7 +5,7 @@ import VisualizationPanel from './components/VisualizationPanel';
 import type { Panel, XYTrace } from './types';
 
 export default function App() {
-  const DEFAULT_SERVER = 'http://nefarian.xray.aps.anl.gov:8020';
+  const DEFAULT_SERVER = 'http://nefarian.xray.aps.anl.gov:8000';
   const toProxyUrlStatic = (url: string) =>
     url.replace(/^(https?):\/\//, `${window.location.origin}/tiled-proxy/$1/`);
 
@@ -47,6 +47,21 @@ export default function App() {
 
   const plot = useCallback((traces: XYTrace[], title: string) => {
     setPanel({ id: crypto.randomUUID(), type: 'xy' as const, traces, title });
+  }, []);
+
+  const livePlot = useCallback((traces: XYTrace[], title: string, stream: string, dataSubNode: string, dataNodeFamily: 'array' | 'table') => {
+    setPanel({
+      id: crypto.randomUUID(), type: 'xy' as const, traces, title,
+      liveConfig: { serverUrl, catalog: selectedCatalog, stream, runId: selectedRunId, dataSubNode, dataNodeFamily },
+    });
+  }, [serverUrl, selectedCatalog, selectedRunId]);
+
+  const stopLive = useCallback(() => {
+    setPanel(prev => {
+      if (!prev || prev.type !== 'xy') return prev;
+      const { liveConfig: _, ...rest } = prev as Extract<typeof prev, { type: 'xy' }>;
+      return rest;
+    });
   }, []);
 
   const addTraces = useCallback((traces: XYTrace[]) => {
@@ -197,6 +212,7 @@ export default function App() {
                       runMotors={selectedRunMotors}
                       onPlot={plot}
                       onAddTraces={panel?.type === 'xy' ? addTraces : null}
+                      onLivePlot={livePlot}
                     />
                   </div>
                 </>
@@ -218,7 +234,7 @@ export default function App() {
         {/* Main content */}
         <main className="flex-1 overflow-hidden p-4">
           {panel ? (
-            <VisualizationPanel panel={panel} onRemove={() => setPanel(null)} onRemoveTrace={removeTrace} />
+            <VisualizationPanel panel={panel} onRemove={() => setPanel(null)} onRemoveTrace={removeTrace} onStopLive={stopLive} />
           ) : (
             <div className="h-full flex flex-col items-center justify-center text-gray-400 select-none">
               <svg className="h-16 w-16 mb-4 opacity-30" fill="none" viewBox="0 0 24 24" stroke="currentColor">

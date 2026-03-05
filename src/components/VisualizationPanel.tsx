@@ -1,11 +1,13 @@
+import { useState, useEffect } from 'react';
 import { PlotlyHeatmap, PlotlyScatter } from '@blueskyproject/finch';
 import { useTiledImage } from '../hooks/useTiledImage';
-import type { Panel } from '../types';
+import type { Panel, XYTrace } from '../types';
 
 type VisualizationPanelProps = {
   panel: Panel;
   onRemove: (id: string) => void;
   onRemoveTrace?: (index: number) => void;
+  onStopLive?: () => void;
 };
 
 function PanelShell({ title, onRemove, id, badge, children, footer }: {
@@ -39,32 +41,100 @@ const PLOTLY_COLORS = [
   '#19d3f3', '#FF6692', '#B6E880', '#FF97FF', '#FECB52',
 ];
 
-function XYPanelContent({ panel, onRemove, onRemoveTrace }: VisualizationPanelProps & { panel: Extract<Panel, { type: 'xy' }> }) {
-  const { traces } = panel;
-  const xAxisTitle = traces[0]?.xLabel ?? '';
-  const yAxisTitle = traces.length === 1 ? traces[0].yLabel : 'Value';
+function XYPanelContent({ panel, onRemove, onRemoveTrace, onStopLive }: VisualizationPanelProps & { panel: Extract<Panel, { type: 'xy' }> }) {
+  const [liveTraces, setLiveTraces] = useState<XYTrace[] | null>(null);
+
+  const liveConfig = panel.liveConfig;
+  useEffect(() => {
+    if (!liveConfig) { setLiveTraces(null); return; }
+    const { serverUrl, catalog, stream, runId, dataSubNode, dataNodeFamily } = liveConfig;
+    let cancelled = false;
+    let busy = false;
+
+    const poll = async () => {
+      if (cancelled || busy) return;
+      busy = true;
+      try {
+        // Check if run has a stop document (complete)
+        const metaResp = await fetch(`${serverUrl}/api/v1/metadata/${catalog}/${runId}`);
+        if (cancelled || !metaResp.ok) return;
+        const meta = await metaResp.json();
+        const isComplete = !!meta.data?.attributes?.metadata?.stop;
+
+        // Re-fetch all trace data
+        const subPath = dataSubNode ? `/${dataSubNode}` : '';
+        let updated: typeof panel.traces;
+        if (dataNodeFamily === 'table') {
+          const resp = await fetch(`${serverUrl}/api/v1/table/full/${catalog}/${runId}/${stream}${subPath}?format=application/json`);
+          if (!resp.ok) return;
+          const table = await resp.json();
+          updated = panel.traces.map(trace => ({ ...trace, x: table[trace.xLabel] ?? trace.x, y: table[trace.yLabel] ?? trace.y }));
+        } else {
+          const base = `${serverUrl}/api/v1/array/full/${catalog}/${runId}/${stream}${subPath}`;
+          updated = await Promise.all(panel.traces.map(async (trace) => {
+            const [xr, yr] = await Promise.all([
+              fetch(`${base}/${trace.xLabel}?format=application/json`),
+              fetch(`${base}/${trace.yLabel}?format=application/json`),
+            ]);
+            if (!xr.ok || !yr.ok) return trace;
+            const [x, y] = await Promise.all([xr.json(), yr.json()]);
+            return { ...trace, x, y };
+          }));
+        }
+
+        if (!cancelled) {
+          setLiveTraces(updated);
+          if (isComplete) onStopLive?.();
+        }
+      } catch { } finally { busy = false; }
+    };
+
+    poll();
+    const id = setInterval(poll, 2000);
+    return () => { cancelled = true; clearInterval(id); };
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [liveConfig?.runId]);
+
+  const displayTraces = liveTraces ?? panel.traces;
+  const xAxisTitle = displayTraces[0]?.xLabel ?? '';
+  const yAxisTitle = displayTraces.length === 1 ? displayTraces[0].yLabel : 'Value';
+
+  const liveBadge = liveConfig ? (
+    <span className="flex items-center gap-1 text-xs font-semibold text-red-500 shrink-0">
+      <span className="w-2 h-2 rounded-full bg-red-500 animate-pulse" />
+      LIVE
+      <button
+        onClick={onStopLive}
+        className="ml-1 text-gray-400 hover:text-gray-600 text-xs font-normal border border-gray-300 rounded px-1"
+        title="Stop live updates"
+      >Stop</button>
+    </span>
+  ) : undefined;
+
   return (
-    <PanelShell title={panel.title} id={panel.id} onRemove={onRemove}>
+    <PanelShell title={panel.title} id={panel.id} onRemove={onRemove} badge={liveBadge}>
       <div className="w-full h-full flex flex-col">
         <div className="shrink-0 flex flex-wrap gap-1 px-2 py-1 border-b border-gray-100">
-          {traces.map((t, i) => (
+          {displayTraces.map((t, i) => (
             <span key={i} className="inline-flex items-center gap-1 text-xs bg-gray-100 rounded px-1.5 py-0.5 max-w-[220px]">
               <span
                 className="w-2.5 h-2.5 rounded-full shrink-0"
                 style={{ backgroundColor: PLOTLY_COLORS[i % PLOTLY_COLORS.length] }}
               />
               <span className="truncate">{t.yLabel} | {t.runLabel} | {t.runId.slice(0, 5)}</span>
-              <button
-                onClick={() => onRemoveTrace?.(i)}
-                className="text-gray-400 hover:text-red-500 leading-none shrink-0"
-                aria-label={`Remove ${t.yLabel}`}
-              >×</button>
+              {!liveConfig && (
+                <button
+                  onClick={() => onRemoveTrace?.(i)}
+                  className="text-gray-400 hover:text-red-500 leading-none shrink-0"
+                  aria-label={`Remove ${t.yLabel}`}
+                >×</button>
+              )}
             </span>
           ))}
         </div>
         <div className="flex-1 min-h-0">
           <PlotlyScatter
-            data={traces.map((t) => ({ x: t.x, y: t.y, mode: 'lines', type: 'scatter', name: `${t.yLabel} | ${t.runLabel} | ${t.runId.slice(0, 5)}`, showlegend: false }))}
+            data={displayTraces.map((t) => ({ x: t.x, y: t.y, mode: 'lines+markers', type: 'scatter', name: `${t.yLabel} | ${t.runLabel} | ${t.runId.slice(0, 5)}`, showlegend: false }))}
             xAxisTitle={xAxisTitle}
             yAxisTitle={yAxisTitle}
             className="w-full h-full"
@@ -158,9 +228,9 @@ function DatasetPanelContent({ panel, onRemove }: VisualizationPanelProps & { pa
   );
 }
 
-export default function VisualizationPanel({ panel, onRemove, onRemoveTrace }: VisualizationPanelProps) {
+export default function VisualizationPanel({ panel, onRemove, onRemoveTrace, onStopLive }: VisualizationPanelProps) {
   if (panel.type === 'xy') {
-    return <XYPanelContent panel={panel} onRemove={onRemove} onRemoveTrace={onRemoveTrace} />;
+    return <XYPanelContent panel={panel} onRemove={onRemove} onRemoveTrace={onRemoveTrace} onStopLive={onStopLive} />;
   }
   return <DatasetPanelContent panel={panel} onRemove={onRemove} />;
 }

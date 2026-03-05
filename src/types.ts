@@ -19,6 +19,14 @@ export type XYPanel = {
   type: 'xy';
   traces: XYTrace[];
   title: string;
+  liveConfig?: {
+    serverUrl: string;
+    catalog: string;
+    stream: string;
+    runId: string;
+    dataSubNode: string;
+    dataNodeFamily: 'array' | 'table';
+  };
 };
 
 export type Panel = DatasetPanel | XYPanel;

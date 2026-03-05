@@ -15,6 +15,7 @@ type FieldSelectorProps = {
   runMotors: string[];
   onPlot: (traces: XYTrace[], title: string) => void;
   onAddTraces: ((traces: XYTrace[]) => void) | null;
+  onLivePlot: ((traces: XYTrace[], title: string, stream: string, dataSubNode: string, dataNodeFamily: 'array' | 'table') => void) | null;
 };
 
 export type FieldSelectorHandle = { schedulePlot: () => void };
@@ -22,7 +23,7 @@ export type FieldSelectorHandle = { schedulePlot: () => void };
 const FieldSelector = forwardRef<FieldSelectorHandle, FieldSelectorProps>(function FieldSelector({
   serverUrl, catalog, runId, runLabel,
   runDetectors, runMotors,
-  onPlot, onAddTraces,
+  onPlot, onAddTraces, onLivePlot,
 }, ref) {
   const [streams, setStreams] = useState<string[]>([]);
   const [selectedStream, setSelectedStream] = useState('');
@@ -35,6 +36,8 @@ const FieldSelector = forwardRef<FieldSelectorHandle, FieldSelectorProps>(functi
   const [adding, setAdding] = useState(false);
   const [error, setError] = useState('');
   const [pendingPlot, setPendingPlot] = useState(false);
+  const [dataSubNode, setDataSubNode] = useState('');
+  const [dataNodeFamily, setDataNodeFamily] = useState<'array' | 'table'>('array');
 
   // Fetch streams for this run
   useEffect(() => {
@@ -57,19 +60,44 @@ const FieldSelector = forwardRef<FieldSelectorHandle, FieldSelectorProps>(functi
     setLoading(true);
     setFields([]);
     setError('');
-    fetch(`${serverUrl}/api/v1/search/${catalog}/${runId}/${selectedStream}/data?page[limit]=200`)
-      .then(r => r.json())
-      .then(json => {
+
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const parseArrayItems = (json: any): FieldInfo[] =>
+      (json.data ?? [])
         // eslint-disable-next-line @typescript-eslint/no-explicit-any
-        const fs: FieldInfo[] = (json.data ?? [])
-          // eslint-disable-next-line @typescript-eslint/no-explicit-any
-          .filter((item: any) => item.attributes?.structure_family === 'array')
-          // eslint-disable-next-line @typescript-eslint/no-explicit-any
-          .map((item: any) => ({
-            name: item.id,
-            shape: item.attributes?.structure?.shape ?? [],
-          }));
-        setFields(fs);
+        .filter((item: any) => item.attributes?.structure_family === 'array')
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
+        .map((item: any) => ({ name: item.id, shape: item.attributes?.structure?.shape ?? [] }));
+
+    const fetchUrl = (url: string) =>
+      fetch(url).then(r => r.ok ? r.json() : Promise.reject(new Error('http')));
+
+    const streamUrl = `${serverUrl}/api/v1/search/${catalog}/${runId}/${selectedStream}?page[limit]=200`;
+
+    fetchUrl(streamUrl)
+      .then(json => {
+        // Arrays directly under stream
+        const arrays = parseArrayItems(json);
+        if (arrays.length > 0) {
+          setDataSubNode(''); setDataNodeFamily('array'); setFields(arrays); return;
+        }
+        // Table node under stream (PostgreSQL adapter)
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
+        const tableItem = (json.data ?? []).find((item: any) => item.attributes?.structure_family === 'table');
+        if (tableItem) {
+          const columns: string[] = tableItem.attributes?.structure?.columns ?? [];
+          setDataSubNode(tableItem.id); setDataNodeFamily('table');
+          setFields(columns.map((col: string) => ({ name: col, shape: [] })));
+          return;
+        }
+        // Try sub-nodes as array containers (older MongoDB adapter)
+        const trySubNode = (sub: string) =>
+          fetchUrl(`${serverUrl}/api/v1/search/${catalog}/${runId}/${selectedStream}/${sub}?page[limit]=200`)
+            .then(j => { const fs = parseArrayItems(j); if (fs.length === 0) throw new Error('empty'); return { fs, sub }; });
+
+        return trySubNode('data')
+          .catch(() => trySubNode('internal'))
+          .then(({ fs, sub }) => { setDataSubNode(sub); setDataNodeFamily('array'); setFields(fs); });
       })
       .catch(() => setError('Failed to load fields'))
       .finally(() => setLoading(false));
@@ -138,7 +166,14 @@ const FieldSelector = forwardRef<FieldSelectorHandle, FieldSelectorProps>(functi
   };
 
   const fetchAllTraces = async (): Promise<XYTrace[]> => {
-    const base = `${serverUrl}/api/v1/array/full/${catalog}/${runId}/${selectedStream}/data`;
+    const subPath = dataSubNode ? `/${dataSubNode}` : '';
+    if (dataNodeFamily === 'table') {
+      const resp = await fetch(`${serverUrl}/api/v1/table/full/${catalog}/${runId}/${selectedStream}${subPath}?format=application/json`);
+      if (!resp.ok) throw new Error('Fetch failed');
+      const table = await resp.json();
+      return yFields.map(yf => ({ x: table[xField] ?? [], y: table[yf] ?? [], xLabel: xField, yLabel: yf, runLabel, runId }));
+    }
+    const base = `${serverUrl}/api/v1/array/full/${catalog}/${runId}/${selectedStream}${subPath}`;
     const [xResp, ...yResps] = await Promise.all([
       fetch(`${base}/${xField}?format=application/json`),
       ...yFields.map(yf => fetch(`${base}/${yf}?format=application/json`)),
@@ -148,11 +183,7 @@ const FieldSelector = forwardRef<FieldSelectorHandle, FieldSelectorProps>(functi
       xResp.json(),
       ...yResps.map(r => r.json()),
     ]);
-    return yFields.map((yf, i) => ({
-      x: xData, y: yDatas[i],
-      xLabel: xField, yLabel: yf,
-      runLabel, runId,
-    }));
+    return yFields.map((yf, i) => ({ x: xData, y: yDatas[i], xLabel: xField, yLabel: yf, runLabel, runId }));
   };
 
   const handlePlot = async () => {
@@ -182,6 +213,23 @@ const FieldSelector = forwardRef<FieldSelectorHandle, FieldSelectorProps>(functi
   }, [pendingPlot, loading, xField, yFields]);
 
   useImperativeHandle(ref, () => ({ schedulePlot: () => setPendingPlot(true) }), []);
+
+  const handleLivePlot = async () => {
+    if (!xField || yFields.length === 0 || adding || !onLivePlot) return;
+    setAdding(true);
+    setError('');
+    try {
+      const traces = await fetchAllTraces();
+      const title = yFields.length === 1
+        ? `${yFields[0]} vs ${xField}`
+        : `${yFields.join(', ')} vs ${xField}`;
+      onLivePlot(traces, title, selectedStream, dataSubNode, dataNodeFamily);
+    } catch {
+      setError('Failed to fetch data');
+    } finally {
+      setAdding(false);
+    }
+  };
 
   const handleAddTraces = async () => {
     if (!xField || yFields.length === 0 || adding || !onAddTraces) return;
@@ -234,6 +282,15 @@ const FieldSelector = forwardRef<FieldSelectorHandle, FieldSelectorProps>(functi
               className="px-2 py-0.5 text-xs bg-white border border-sky-600 text-sky-600 rounded hover:bg-sky-50 disabled:opacity-40 disabled:cursor-not-allowed font-medium"
               title={onAddTraces ? 'Add curve(s) to current plot' : 'No plot open — use Plot first'}
             >+</button>
+            <button
+              onClick={handleLivePlot}
+              disabled={!xField || yFields.length === 0 || adding || !onLivePlot}
+              className="flex items-center gap-1 px-2 py-0.5 text-xs bg-white border border-red-400 text-red-500 rounded hover:bg-red-50 disabled:opacity-40 disabled:cursor-not-allowed font-medium"
+              title="Start live plot (polls for new data as run acquires)"
+            >
+              <span className="w-1.5 h-1.5 rounded-full bg-red-500 animate-pulse" />
+              Live
+            </button>
           </div>
         </div>
         {error && <p className="text-xs text-red-500 mt-1">{error}</p>}
