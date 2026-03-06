@@ -1,14 +1,17 @@
-import { useState, useEffect, useMemo } from 'react';
+import { useState, useEffect, useMemo, useRef } from 'react';
 
 type RunRow = {
   id: string;
   scanId?: number | string;
   planName?: string;
   detectors?: string;
+  positioners?: string;
+  numPoints?: number;
   detectorList: string[];
   motorList: string[];
   date?: string;
   status?: string;
+  acquiring: boolean;
 };
 
 type RunTableProps = {
@@ -16,9 +19,12 @@ type RunTableProps = {
   catalog: string;
   page: number;
   selectedRunId?: string;
+  autoFollow?: boolean;
   onPageChange: (page: number) => void;
-  onSelectRun: (runId: string, label: string, detectors: string[], motors: string[]) => void;
-  onDoubleClickRun?: (runId: string, label: string, detectors: string[], motors: string[]) => void;
+  onSelectRun: (runId: string, label: string, detectors: string[], motors: string[], acquiring: boolean) => void;
+  onDoubleClickRun?: (runId: string, label: string, detectors: string[], motors: string[], acquiring: boolean) => void;
+  onAutoFollowChange?: (v: boolean) => void;
+  onNewAcquiringRun?: (runId: string, label: string, detectors: string[], motors: string[], acquiring: boolean) => void;
 };
 
 type Filters = {
@@ -38,7 +44,7 @@ function parseRun(item: Record<string, unknown>): RunRow {
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   const attrs = (item.attributes ?? {}) as Record<string, any>;
   const start = attrs.metadata?.start ?? {};
-  const stop  = attrs.metadata?.stop  ?? {};
+  const stop  = attrs.metadata?.stop;
   const detectorList: string[] = Array.isArray(start.detectors) ? start.detectors : [];
   const motorList: string[] = Array.isArray(start.motors)
     ? start.motors
@@ -51,10 +57,13 @@ function parseRun(item: Record<string, unknown>): RunRow {
     scanId:       start.scan_id,
     planName:     start.plan_name,
     detectors:    detectorList.join(', ') || undefined,
+    positioners:  motorList.join(', ') || undefined,
+    numPoints:    start.num_points,
     detectorList,
     motorList,
     date,
-    status:       stop.exit_status,
+    status:       stop?.exit_status,
+    acquiring:    !stop,
   };
 }
 
@@ -159,13 +168,15 @@ function DualRangeSlider({ minMs, maxMs, fromMs, toMs, onFromChange, onToChange 
   );
 }
 
-export default function RunTable({ serverUrl, catalog, page, selectedRunId, onPageChange, onSelectRun, onDoubleClickRun }: RunTableProps) {
+export default function RunTable({ serverUrl, catalog, page, selectedRunId, autoFollow, onPageChange, onSelectRun, onDoubleClickRun, onAutoFollowChange, onNewAcquiringRun }: RunTableProps) {
   const [runs, setRuns] = useState<RunRow[]>([]);
   const [total, setTotal] = useState(0);
   const [loading, setLoading] = useState(false);
   const [filters, setFilters] = useState<Filters>(EMPTY_FILTERS);
   const [debouncedFilters, setDebouncedFilters] = useState<Filters>(EMPTY_FILTERS);
   const [minDateMs, setMinDateMs] = useState(new Date('2000-01-01').getTime());
+  const [refreshKey, setRefreshKey] = useState(0);
+  const bgRefreshRef = useRef(false);
 
   // Fetch the oldest run's timestamp to set the slider minimum
   useEffect(() => {
@@ -179,6 +190,46 @@ export default function RunTable({ serverUrl, catalog, page, selectedRunId, onPa
         if (time) setMinDateMs(Math.floor(time) * 1000);
       })
       .catch(() => {});
+  }, [serverUrl, catalog]);
+
+  // Poll every 5s for new runs and status updates (silent — no loading spinner)
+  useEffect(() => {
+    if (!serverUrl || !catalog) return;
+    const id = setInterval(() => { bgRefreshRef.current = true; setRefreshKey(k => k + 1); }, 5000);
+    return () => clearInterval(id);
+  }, [serverUrl, catalog]);
+
+  // Detect new acquiring runs independently of current page view
+  const onNewAcquiringRunRef = useRef(onNewAcquiringRun);
+  useEffect(() => { onNewAcquiringRunRef.current = onNewAcquiringRun; });
+
+  useEffect(() => {
+    if (!serverUrl || !catalog) return;
+    let initialDone = false;
+    let lastSeenId = '';
+    const check = async () => {
+      try {
+        const r1 = await fetch(`${serverUrl}/api/v1/search/${catalog}?page[limit]=1&page[offset]=0`);
+        if (!r1.ok) return;
+        const j1 = await r1.json();
+        const total: number = j1.meta?.count ?? j1.meta?.pagination?.count ?? 0;
+        if (total === 0) { initialDone = true; return; }
+        const r2 = await fetch(`${serverUrl}/api/v1/search/${catalog}?page[limit]=1&page[offset]=${total - 1}`);
+        if (!r2.ok) return;
+        const j2 = await r2.json();
+        const items: Record<string, unknown>[] = j2.data ?? [];
+        if (items.length === 0) { initialDone = true; return; }
+        const run = parseRun(items[0]);
+        if (initialDone && run.id !== lastSeenId && run.acquiring) {
+          onNewAcquiringRunRef.current?.(run.id, run.scanId != null ? String(run.scanId) : '', run.detectorList, run.motorList, run.acquiring);
+        }
+        lastSeenId = run.id;
+        initialDone = true;
+      } catch { }
+    };
+    check();
+    const id = setInterval(check, 5000);
+    return () => clearInterval(id);
   }, [serverUrl, catalog]);
 
   const isFiltering = Object.values(debouncedFilters).some(Boolean);
@@ -199,7 +250,9 @@ export default function RunTable({ serverUrl, catalog, page, selectedRunId, onPa
   useEffect(() => {
     if (!serverUrl || !catalog) { setRuns([]); setTotal(0); return; }
     let cancelled = false;
-    setLoading(true);
+    const isBg = bgRefreshRef.current;
+    bgRefreshRef.current = false;
+    if (!isBg) setLoading(true);
 
     const extra = buildFilterQs(debouncedFilters);
 
@@ -235,12 +288,12 @@ export default function RunTable({ serverUrl, catalog, page, selectedRunId, onPa
       } catch {
         // ignore
       } finally {
-        if (!cancelled) setLoading(false);
+        if (!cancelled && !isBg) setLoading(false);
       }
     })();
 
     return () => { cancelled = true; };
-  }, [serverUrl, catalog, page, filterKey]);  // filterKey captures all filter fields
+  }, [serverUrl, catalog, page, filterKey, refreshKey]);
 
   const [showFilters, setShowFilters] = useState(false);
   const lastPage = Math.max(0, Math.ceil(total / PAGE_SIZE) - 1);
@@ -263,6 +316,17 @@ export default function RunTable({ serverUrl, catalog, page, selectedRunId, onPa
       <div className="shrink-0 border-b border-gray-100 px-3 py-2 flex items-center gap-2">
         <h2 className="text-sm font-semibold text-gray-700">Runs</h2>
         {isFiltering && <span className="w-1.5 h-1.5 rounded-full bg-sky-500 shrink-0" title="Filters active" />}
+        {autoFollow !== undefined && (
+          <button
+            onClick={() => onAutoFollowChange?.(!autoFollow)}
+            className={`px-2 py-0.5 text-xs rounded font-medium border transition-colors ${
+              autoFollow ? 'bg-sky-100 text-sky-700 border-sky-400' : 'bg-white text-gray-400 border-gray-300 hover:text-gray-600'
+            }`}
+            title={autoFollow ? 'Auto-follow on — auto-plots new runs' : 'Auto-follow off — click to enable'}
+          >
+            {autoFollow ? '● Auto' : '○ Auto'}
+          </button>
+        )}
         <button
           onClick={() => setShowFilters(v => !v)}
           className={`ml-auto p-1 rounded transition-colors ${showFilters ? 'text-sky-600 bg-sky-50' : 'text-gray-400 hover:text-gray-600'}`}
@@ -333,25 +397,33 @@ export default function RunTable({ serverUrl, catalog, page, selectedRunId, onPa
               <tr>
                 <th className={thClass}>Scan ID</th>
                 <th className={thClass}>Plan</th>
-                <th className={thClass}>Detectors</th>
-                <th className={thClass}>Date</th>
+                <th className={thClass}>Det</th>
+                <th className={thClass}>Pos</th>
+                <th className={thClass}>Pts</th>
                 <th className={thClass}>Status</th>
+                <th className={thClass}>Date</th>
               </tr>
             </thead>
             <tbody>
               {runs.map((run, i) => (
                 <tr
                   key={run.id}
-                  onClick={() => onSelectRun(run.id, run.scanId != null ? String(run.scanId) : '', run.detectorList, run.motorList)}
-                  onDoubleClick={() => onDoubleClickRun?.(run.id, run.scanId != null ? String(run.scanId) : '', run.detectorList, run.motorList)}
+                  onClick={() => onSelectRun(run.id, run.scanId != null ? String(run.scanId) : '', run.detectorList, run.motorList, run.acquiring)}
+                  onDoubleClick={() => onDoubleClickRun?.(run.id, run.scanId != null ? String(run.scanId) : '', run.detectorList, run.motorList, run.acquiring)}
                   className={`cursor-pointer ${run.id === selectedRunId ? 'bg-sky-100 hover:bg-sky-100' : `hover:bg-sky-50 ${i % 2 === 0 ? 'bg-white' : 'bg-gray-50'}`}`}
                 >
                   <td className={tdClass}>{run.scanId ?? '—'}</td>
                   <td className={tdClass}>{run.planName ?? '—'}</td>
                   <td className={`${tdClass} max-w-[100px]`} title={run.detectors}>{run.detectors ?? '—'}</td>
-                  <td className={tdClass}>{run.date ?? '—'}</td>
+                  <td className={`${tdClass} max-w-[100px]`} title={run.positioners}>{run.positioners ?? '—'}</td>
+                  <td className={tdClass}>{run.numPoints ?? '—'}</td>
                   <td className={tdClass}>
-                    {run.status ? (
+                    {run.acquiring ? (
+                      <span className="flex items-center gap-1 text-xs font-medium text-sky-600">
+                        <span className="w-1.5 h-1.5 rounded-full bg-sky-500 animate-pulse shrink-0" />
+                        acquiring
+                      </span>
+                    ) : run.status ? (
                       <span className={`px-1.5 py-0.5 rounded text-xs font-medium ${
                         run.status === 'success' ? 'bg-green-100 text-green-700' : 'bg-red-100 text-red-600'
                       }`}>
@@ -359,11 +431,12 @@ export default function RunTable({ serverUrl, catalog, page, selectedRunId, onPa
                       </span>
                     ) : '—'}
                   </td>
+                  <td className={tdClass}>{run.date ?? '—'}</td>
                 </tr>
               ))}
               {runs.length === 0 && !loading && (
                 <tr>
-                  <td colSpan={5} className="px-2 py-6 text-center text-xs text-gray-400">
+                  <td colSpan={7} className="px-2 py-6 text-center text-xs text-gray-400">
                     {isFiltering ? 'No runs match the filter' : 'No runs'}
                   </td>
                 </tr>

@@ -20,7 +20,9 @@ export default function App() {
   const [selectedRunLabel, setSelectedRunLabel] = useState('');
   const [selectedRunDetectors, setSelectedRunDetectors] = useState<string[]>([]);
   const [selectedRunMotors, setSelectedRunMotors] = useState<string[]>([]);
+  const [selectedRunAcquiring, setSelectedRunAcquiring] = useState(false);
   const [runPage, setRunPage] = useState(0);
+  const [autoFollow, setAutoFollow] = useState(false);
   const fieldSelectorRef = useRef<FieldSelectorHandle>(null);
 
   const toProxyUrl = toProxyUrlStatic;
@@ -178,19 +180,35 @@ export default function App() {
                   catalog={selectedCatalog}
                   page={runPage}
                   selectedRunId={selectedRunId}
+                  autoFollow={autoFollow}
                   onPageChange={setRunPage}
-                  onSelectRun={(id, label, dets, motors) => {
+                  onSelectRun={(id, label, dets, motors, acquiring) => {
+                    if (id === selectedRunId && acquiring) {
+                      fieldSelectorRef.current?.scheduleLive();
+                      return;
+                    }
                     setSelectedRunId(id);
                     setSelectedRunLabel(label);
                     setSelectedRunDetectors(dets);
                     setSelectedRunMotors(motors);
+                    setSelectedRunAcquiring(acquiring);
                   }}
-                  onDoubleClickRun={(id, label, dets, motors) => {
+                  onDoubleClickRun={(id, label, dets, motors, acquiring) => {
                     setSelectedRunId(id);
                     setSelectedRunLabel(label);
                     setSelectedRunDetectors(dets);
                     setSelectedRunMotors(motors);
-                    fieldSelectorRef.current?.schedulePlot();
+                    setSelectedRunAcquiring(acquiring);
+                    if (!acquiring) fieldSelectorRef.current?.schedulePlot();
+                  }}
+                  onAutoFollowChange={setAutoFollow}
+                  onNewAcquiringRun={(id, label, dets, motors, acquiring) => {
+                    if (!autoFollow) return;
+                    setSelectedRunId(id);
+                    setSelectedRunLabel(label);
+                    setSelectedRunDetectors(dets);
+                    setSelectedRunMotors(motors);
+                    setSelectedRunAcquiring(acquiring);
                   }}
                 />
               </div>
@@ -210,6 +228,7 @@ export default function App() {
                       runLabel={selectedRunLabel}
                       runDetectors={selectedRunDetectors}
                       runMotors={selectedRunMotors}
+                      runAcquiring={selectedRunAcquiring}
                       onPlot={plot}
                       onAddTraces={panel?.type === 'xy' ? addTraces : null}
                       onLivePlot={livePlot}

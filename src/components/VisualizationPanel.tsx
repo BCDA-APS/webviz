@@ -44,9 +44,12 @@ const PLOTLY_COLORS = [
 function XYPanelContent({ panel, onRemove, onRemoveTrace, onStopLive }: VisualizationPanelProps & { panel: Extract<Panel, { type: 'xy' }> }) {
   const [liveTraces, setLiveTraces] = useState<XYTrace[] | null>(null);
 
+  // Reset liveTraces when a new panel is created so stale data doesn't bleed into a new plot
+  useEffect(() => { setLiveTraces(null); }, [panel.id]);
+
   const liveConfig = panel.liveConfig;
   useEffect(() => {
-    if (!liveConfig) { setLiveTraces(null); return; }
+    if (!liveConfig) return;
     const { serverUrl, catalog, stream, runId, dataSubNode, dataNodeFamily } = liveConfig;
     let cancelled = false;
     let busy = false;
@@ -68,7 +71,13 @@ function XYPanelContent({ panel, onRemove, onRemoveTrace, onStopLive }: Visualiz
           const resp = await fetch(`${serverUrl}/api/v1/table/full/${catalog}/${runId}/${stream}${subPath}?format=application/json`);
           if (!resp.ok) return;
           const table = await resp.json();
-          updated = panel.traces.map(trace => ({ ...trace, x: table[trace.xLabel] ?? trace.x, y: table[trace.yLabel] ?? trace.y }));
+          const seqNums: number[] = table.seq_num ?? [];
+          const nRows = seqNums.length > 0 ? (seqNums.findIndex(s => s === 0) === -1 ? seqNums.length : seqNums.findIndex(s => s === 0)) : undefined;
+          updated = panel.traces.map(trace => ({
+            ...trace,
+            x: nRows !== undefined ? (table[trace.xLabel] ?? trace.x).slice(0, nRows) : (table[trace.xLabel] ?? trace.x),
+            y: nRows !== undefined ? (table[trace.yLabel] ?? trace.y).slice(0, nRows) : (table[trace.yLabel] ?? trace.y),
+          }));
         } else {
           const base = `${serverUrl}/api/v1/array/full/${catalog}/${runId}/${stream}${subPath}`;
           updated = await Promise.all(panel.traces.map(async (trace) => {
@@ -95,7 +104,13 @@ function XYPanelContent({ panel, onRemove, onRemoveTrace, onStopLive }: Visualiz
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [liveConfig?.runId]);
 
-  const displayTraces = liveTraces ?? panel.traces;
+  // Static traces added via "+" to a live panel live in panel.traces but not in liveTraces;
+  // merge them so they're always visible alongside polled live data.
+  const liveKeys = new Set(liveTraces?.map(t => `${t.runId}|${t.xLabel}|${t.yLabel}`) ?? []);
+  const staticTraces = liveTraces
+    ? panel.traces.filter(t => !liveKeys.has(`${t.runId}|${t.xLabel}|${t.yLabel}`))
+    : [];
+  const displayTraces = liveTraces ? [...liveTraces, ...staticTraces] : panel.traces;
   const xAxisTitle = displayTraces[0]?.xLabel ?? '';
   const yAxisTitle = displayTraces.length === 1 ? displayTraces[0].yLabel : 'Value';
 
@@ -103,11 +118,6 @@ function XYPanelContent({ panel, onRemove, onRemoveTrace, onStopLive }: Visualiz
     <span className="flex items-center gap-1 text-xs font-semibold text-red-500 shrink-0">
       <span className="w-2 h-2 rounded-full bg-red-500 animate-pulse" />
       LIVE
-      <button
-        onClick={onStopLive}
-        className="ml-1 text-gray-400 hover:text-gray-600 text-xs font-normal border border-gray-300 rounded px-1"
-        title="Stop live updates"
-      >Stop</button>
     </span>
   ) : undefined;
 
@@ -121,7 +131,7 @@ function XYPanelContent({ panel, onRemove, onRemoveTrace, onStopLive }: Visualiz
                 className="w-2.5 h-2.5 rounded-full shrink-0"
                 style={{ backgroundColor: PLOTLY_COLORS[i % PLOTLY_COLORS.length] }}
               />
-              <span className="truncate">{t.yLabel} | {t.runLabel} | {t.runId.slice(0, 5)}</span>
+              <span className="truncate">{t.runLabel} ({t.runId.slice(0, 7)}) - {t.yLabel}</span>
               {!liveConfig && (
                 <button
                   onClick={() => onRemoveTrace?.(i)}
@@ -134,7 +144,10 @@ function XYPanelContent({ panel, onRemove, onRemoveTrace, onStopLive }: Visualiz
         </div>
         <div className="flex-1 min-h-0">
           <PlotlyScatter
-            data={displayTraces.map((t) => ({ x: t.x, y: t.y, mode: 'lines+markers', type: 'scatter', name: `${t.yLabel} | ${t.runLabel} | ${t.runId.slice(0, 5)}`, showlegend: false }))}
+            data={displayTraces.map((t) => {
+              const order = t.x.map((_, i) => i).sort((a, b) => t.x[a] - t.x[b]);
+              return { x: order.map(i => t.x[i]), y: order.map(i => t.y[i]), mode: 'lines+markers', type: 'scatter', name: `${t.runLabel} (${t.runId.slice(0, 7)}) - ${t.yLabel}`, showlegend: false };
+            })}
             xAxisTitle={xAxisTitle}
             yAxisTitle={yAxisTitle}
             className="w-full h-full"

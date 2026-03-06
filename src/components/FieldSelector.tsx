@@ -13,16 +13,17 @@ type FieldSelectorProps = {
   runLabel: string;
   runDetectors: string[];
   runMotors: string[];
+  runAcquiring: boolean;
   onPlot: (traces: XYTrace[], title: string) => void;
   onAddTraces: ((traces: XYTrace[]) => void) | null;
   onLivePlot: ((traces: XYTrace[], title: string, stream: string, dataSubNode: string, dataNodeFamily: 'array' | 'table') => void) | null;
 };
 
-export type FieldSelectorHandle = { schedulePlot: () => void };
+export type FieldSelectorHandle = { schedulePlot: () => void; scheduleLive: () => void };
 
 const FieldSelector = forwardRef<FieldSelectorHandle, FieldSelectorProps>(function FieldSelector({
   serverUrl, catalog, runId, runLabel,
-  runDetectors, runMotors,
+  runDetectors, runMotors, runAcquiring,
   onPlot, onAddTraces, onLivePlot,
 }, ref) {
   const [streams, setStreams] = useState<string[]>([]);
@@ -35,9 +36,10 @@ const FieldSelector = forwardRef<FieldSelectorHandle, FieldSelectorProps>(functi
   const lastYRef = useRef<string[]>([]);
   const [adding, setAdding] = useState(false);
   const [error, setError] = useState('');
-  const [pendingPlot, setPendingPlot] = useState(false);
+  const [pendingAction, setPendingAction] = useState<'plot' | 'live' | null>(null);
   const [dataSubNode, setDataSubNode] = useState('');
   const [dataNodeFamily, setDataNodeFamily] = useState<'array' | 'table'>('array');
+  const [livePointCount, setLivePointCount] = useState<number | null>(null);
 
   // Fetch streams for this run
   useEffect(() => {
@@ -171,7 +173,13 @@ const FieldSelector = forwardRef<FieldSelectorHandle, FieldSelectorProps>(functi
       const resp = await fetch(`${serverUrl}/api/v1/table/full/${catalog}/${runId}/${selectedStream}${subPath}?format=application/json`);
       if (!resp.ok) throw new Error('Fetch failed');
       const table = await resp.json();
-      return yFields.map(yf => ({ x: table[xField] ?? [], y: table[yf] ?? [], xLabel: xField, yLabel: yf, runLabel, runId }));
+      const seqNums: number[] = table.seq_num ?? [];
+      const nRows = seqNums.length > 0 ? (seqNums.findIndex(s => s === 0) === -1 ? seqNums.length : seqNums.findIndex(s => s === 0)) : undefined;
+      return yFields.map(yf => ({
+        x: nRows !== undefined ? (table[xField] ?? []).slice(0, nRows) : (table[xField] ?? []),
+        y: nRows !== undefined ? (table[yf] ?? []).slice(0, nRows) : (table[yf] ?? []),
+        xLabel: xField, yLabel: yf, runLabel, runId,
+      }));
     }
     const base = `${serverUrl}/api/v1/array/full/${catalog}/${runId}/${selectedStream}${subPath}`;
     const [xResp, ...yResps] = await Promise.all([
@@ -203,16 +211,79 @@ const FieldSelector = forwardRef<FieldSelectorHandle, FieldSelectorProps>(functi
     }
   };
 
-  // Fire plot once fields are ready when triggered by double-click
+  // Auto-schedule live plot when selecting an acquiring run; clear when switching to non-acquiring
   useEffect(() => {
-    if (pendingPlot && !loading && xField && yFields.length > 0) {
-      setPendingPlot(false);
-      handlePlot();
+    setPendingAction(runAcquiring && !!onLivePlot ? 'live' : null);
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [runId]);
+
+  // When waiting for live and primary stream hasn't appeared yet, poll for it
+  useEffect(() => {
+    if (pendingAction !== 'live' || selectedStream === 'primary') return;
+    const poll = () =>
+      fetch(`${serverUrl}/api/v1/search/${catalog}/${runId}?page[limit]=50`)
+        .then(r => r.json())
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
+        .then(json => {
+          const names: string[] = (json.data ?? []).map((item: any) => item.id);
+          if (names.includes('primary')) { setStreams(names); setSelectedStream('primary'); }
+        })
+        .catch(() => {});
+    const id = setInterval(poll, 2000);
+    return () => clearInterval(id);
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [pendingAction, selectedStream, serverUrl, catalog, runId]);
+
+  // Retry fetchFields every 2s while on primary but waiting for data to appear
+  useEffect(() => {
+    if (pendingAction !== 'live' || loading || fields.length > 0 || selectedStream !== 'primary') return;
+    const id = setInterval(fetchFields, 2000);
+    return () => clearInterval(id);
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [pendingAction, loading, fields.length, selectedStream]);
+
+  // Fire plot/live once fields are ready; guard live against non-primary stream
+  useEffect(() => {
+    if (pendingAction && !loading && xField && yFields.length > 0) {
+      if (pendingAction === 'live' && selectedStream !== 'primary') return;
+      const action = pendingAction;
+      setPendingAction(null);
+      if (action === 'live') handleLivePlot();
+      else handlePlot();
     }
   // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [pendingPlot, loading, xField, yFields]);
+  }, [pendingAction, loading, xField, yFields, selectedStream]);
 
-  useImperativeHandle(ref, () => ({ schedulePlot: () => setPendingPlot(true) }), []);
+  useImperativeHandle(ref, () => ({
+    schedulePlot: () => setPendingAction('plot'),
+    scheduleLive: () => setPendingAction('live'),
+  }), []);
+
+  // Fetch table row count for shape display — polls every 2s while acquiring, once when completed
+  useEffect(() => {
+    if (dataNodeFamily !== 'table' || !dataSubNode || selectedStream !== 'primary' || fields.length === 0 || pendingAction !== null) {
+      setLivePointCount(null);
+      return;
+    }
+    const subPath = `/${dataSubNode}`;
+    let cancelled = false;
+    const fetchCount = async () => {
+      try {
+        const resp = await fetch(`${serverUrl}/api/v1/table/full/${catalog}/${runId}/${selectedStream}${subPath}?format=application/json`);
+        if (!resp.ok || cancelled) return;
+        const table = await resp.json();
+        const seqNums: number[] = table.seq_num ?? [];
+        const nRows = seqNums.length > 0
+          ? (seqNums.findIndex(s => s === 0) === -1 ? seqNums.length : seqNums.findIndex(s => s === 0))
+          : 0;
+        if (!cancelled) setLivePointCount(nRows);
+      } catch { }
+    };
+    fetchCount();
+    const id = runAcquiring ? setInterval(fetchCount, 2000) : undefined;
+    return () => { cancelled = true; if (id) clearInterval(id); };
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [runAcquiring, dataNodeFamily, dataSubNode, selectedStream, fields.length, serverUrl, catalog, runId, pendingAction]);
 
   const handleLivePlot = async () => {
     if (!xField || yFields.length === 0 || adding || !onLivePlot) return;
@@ -266,12 +337,7 @@ const FieldSelector = forwardRef<FieldSelectorHandle, FieldSelectorProps>(functi
           </select>
           <div className="ml-auto flex items-center gap-1">
             <button
-              onClick={fetchFields}
-              className="p-1 text-gray-400 hover:text-gray-700 text-base leading-none"
-              title="Refresh fields"
-            >↻</button>
-            <button
-              onClick={handlePlot}
+              onClick={() => { setPendingAction(null); handlePlot(); }}
               disabled={!xField || yFields.length === 0 || adding}
               className="px-2 py-0.5 text-xs bg-sky-600 text-white rounded hover:bg-sky-500 disabled:opacity-40 disabled:cursor-not-allowed font-medium"
               title="Replace plot with selected fields"
@@ -282,15 +348,6 @@ const FieldSelector = forwardRef<FieldSelectorHandle, FieldSelectorProps>(functi
               className="px-2 py-0.5 text-xs bg-white border border-sky-600 text-sky-600 rounded hover:bg-sky-50 disabled:opacity-40 disabled:cursor-not-allowed font-medium"
               title={onAddTraces ? 'Add curve(s) to current plot' : 'No plot open — use Plot first'}
             >+</button>
-            <button
-              onClick={handleLivePlot}
-              disabled={!xField || yFields.length === 0 || adding || !onLivePlot}
-              className="flex items-center gap-1 px-2 py-0.5 text-xs bg-white border border-red-400 text-red-500 rounded hover:bg-red-50 disabled:opacity-40 disabled:cursor-not-allowed font-medium"
-              title="Start live plot (polls for new data as run acquires)"
-            >
-              <span className="w-1.5 h-1.5 rounded-full bg-red-500 animate-pulse" />
-              Live
-            </button>
           </div>
         </div>
         {error && <p className="text-xs text-red-500 mt-1">{error}</p>}
@@ -298,8 +355,10 @@ const FieldSelector = forwardRef<FieldSelectorHandle, FieldSelectorProps>(functi
 
       {/* Table */}
       <div className="flex-1 overflow-y-scroll">
-        {loading ? (
-          <div className="flex items-center justify-center h-20 text-gray-400 text-xs">Loading…</div>
+        {loading || (pendingAction === 'live' && fields.length === 0) ? (
+          <div className="flex items-center justify-center h-20 text-gray-400 text-xs">
+            {pendingAction === 'live' && !loading ? 'Waiting for run to start…' : 'Loading…'}
+          </div>
         ) : (
           <table className="w-full border-collapse">
             <thead className="sticky top-0 z-10">
@@ -339,7 +398,9 @@ const FieldSelector = forwardRef<FieldSelectorHandle, FieldSelectorProps>(functi
                         className="accent-sky-600"
                       />
                     </td>
-                    <td className={`${tdClass} text-right text-gray-400`}>({f.shape.join(', ')})</td>
+                    <td className={`${tdClass} text-right text-gray-400`}>
+                      {livePointCount !== null ? `(${livePointCount})` : `(${f.shape.join(', ')})`}
+                    </td>
                   </tr>
                 );
               })}
