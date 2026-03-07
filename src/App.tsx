@@ -32,6 +32,15 @@ function computeDerivative(xs: number[], ys: number[], w: number): { x: number[]
   return { x: sx, y: dy };
 }
 
+const DEFAULT_QS_URL = 'http://nefarian.xray.aps.anl.gov:60610';
+function loadQsUrl() {
+  const saved = localStorage.getItem('qsUrl') ?? DEFAULT_QS_URL;
+  return saved.startsWith('http://') || saved.startsWith('https://') ? saved : DEFAULT_QS_URL;
+}
+function toQsProxyUrl(url: string) {
+  return url.replace(/^(https?):\/\//, `${window.location.origin}/qs-proxy/$1/`);
+}
+
 export default function App() {
   const DEFAULT_SERVER = 'http://nefarian.xray.aps.anl.gov:8000';
   const toProxyUrlStatic = (url: string) =>
@@ -68,6 +77,11 @@ export default function App() {
   const [smoothingWindow, setSmoothingWindow] = useState(1);
   const [centerTab, setCenterTab] = useState<'graph' | 'data' | 'metadata' | 'summary'>('graph');
   const [appTab, setAppTab] = useState<'visualizer' | 'qserver'>('visualizer');
+  const [qsInputUrl, setQsInputUrl] = useState(loadQsUrl);
+  const [qsInputApiKey, setQsInputApiKey] = useState(() => localStorage.getItem('qsApiKey') ?? '');
+  const [qsProxyUrl, setQsProxyUrl] = useState(() => toQsProxyUrl(loadQsUrl()));
+  const [qsConnectionId, setQsConnectionId] = useState(0);
+  const [qsStatus, setQsStatus] = useState<{ manager_state: string; re_state: string; items_in_queue: number } | null>(null);
   const [traceStyles, setTraceStyles] = useState<TraceStyle[]>([]);
   const [cursor1, setCursor1] = useState<number | null>(null);
   const [cursor1Y, setCursor1Y] = useState<number | null>(null);
@@ -170,6 +184,15 @@ export default function App() {
     setSelectedRunId('');
     setSelectedRunLabel('');
     setServerUrl(toProxyUrl(inputUrl));
+  };
+
+  const handleQsConnect = () => {
+    const url = qsInputUrl.replace(/\/$/, '');
+    localStorage.setItem('qsUrl', url);
+    localStorage.setItem('qsApiKey', qsInputApiKey);
+    setQsProxyUrl(toQsProxyUrl(url));
+    setQsStatus(null);
+    setQsConnectionId(id => id + 1);
   };
 
   // Fetch top-level catalog names whenever the server changes
@@ -325,13 +348,29 @@ export default function App() {
             <button
               key={tab}
               onClick={() => setAppTab(tab)}
-              className={`px-4 h-full text-sm font-medium rounded-t transition-colors ${
+              className={`px-4 h-full text-sm font-medium rounded-t transition-colors flex items-center gap-1.5 ${
                 appTab === tab
-                  ? 'bg-gray-50 text-sky-900'
+                  ? 'bg-sky-100 text-sky-900'
                   : 'text-sky-300 hover:text-white hover:bg-sky-800'
               }`}
             >
-              {tab === 'visualizer' ? 'Visualizer' : 'Queue Server'}
+              {tab === 'visualizer' ? (
+                <>
+                  <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
+                    <polyline points="22 12 18 12 15 21 9 3 6 12 2 12" />
+                  </svg>
+                  Visualizer
+                </>
+              ) : (
+                <>
+                  <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
+                    <polygon points="12 2 2 7 12 12 22 7 12 2" />
+                    <polyline points="2 12 12 17 22 12" />
+                    <polyline points="2 17 12 22 22 17" />
+                  </svg>
+                  Q Server
+                </>
+              )}
             </button>
           ))}
         </div>
@@ -372,12 +411,47 @@ export default function App() {
             )}
           </div>
         )}
+
+        {/* QServer controls (qserver tab only) */}
+        {appTab === 'qserver' && (
+          <div className="ml-auto flex items-center gap-2">
+            <label className="text-sky-300 text-xs font-medium">HTTP URL</label>
+            <input
+              className="bg-sky-900 text-white text-sm px-3 py-1.5 rounded border border-sky-700 focus:outline-none focus:border-sky-400 w-96 placeholder:text-sky-500 font-mono"
+              value={qsInputUrl}
+              onChange={e => setQsInputUrl(e.target.value)}
+              onKeyDown={e => e.key === 'Enter' && handleQsConnect()}
+              placeholder="http://localhost:60610"
+            />
+            <label className="text-sky-300 text-xs font-medium">API Key</label>
+            <input
+              className="bg-sky-900 text-white text-sm px-3 py-1.5 rounded border border-sky-700 focus:outline-none focus:border-sky-400 w-36 placeholder:text-sky-500 font-mono"
+              value={qsInputApiKey}
+              onChange={e => setQsInputApiKey(e.target.value)}
+              onKeyDown={e => e.key === 'Enter' && handleQsConnect()}
+              type="password"
+              placeholder="(optional)"
+            />
+            <button
+              onClick={handleQsConnect}
+              className="bg-sky-600 hover:bg-sky-500 active:bg-sky-700 text-white text-sm px-4 py-1.5 rounded font-medium transition-colors"
+            >Connect</button>
+            {qsStatus && (
+              <>
+                <div className="w-px h-6 bg-sky-700 mx-1" />
+                <span className="text-sky-300 text-xs">Manager: <span className={`font-mono font-medium ${qsStatus.manager_state === 'idle' ? 'text-green-400' : 'text-amber-400'}`}>{qsStatus.manager_state}</span></span>
+                <span className="text-sky-300 text-xs">RE: <span className={`font-mono font-medium ${qsStatus.re_state === 'idle' ? 'text-green-400' : qsStatus.re_state === 'running' ? 'text-sky-300 animate-pulse' : 'text-amber-400'}`}>{qsStatus.re_state}</span></span>
+                <span className="text-sky-300 text-xs">Queue: <span className="text-white font-medium">{qsStatus.items_in_queue}</span></span>
+              </>
+            )}
+          </div>
+        )}
       </header>
 
       {/* Queue Server tab */}
       {appTab === 'qserver' && (
         <div className="flex-1 overflow-hidden">
-          <QServerPanel />
+          <QServerPanel key={qsConnectionId} proxyUrl={qsProxyUrl} serverUrl={qsInputUrl.replace(/\/$/, '')} onStatusChange={setQsStatus} />
         </div>
       )}
 

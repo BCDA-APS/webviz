@@ -35,10 +35,6 @@ type ServerStatus = {
 
 // ─── Helpers ─────────────────────────────────────────────────────────────────
 
-function toProxyUrl(url: string) {
-  return url.replace(/^(https?):\/\//, `${window.location.origin}/qs-proxy/$1/`);
-}
-
 function statusColor(status?: string) {
   if (!status) return 'bg-gray-200 text-gray-600';
   if (status === 'completed') return 'bg-green-100 text-green-700';
@@ -125,19 +121,11 @@ function HistoryCard({ item }: { item: QueueItem }) {
 
 // ─── Main component ───────────────────────────────────────────────────────────
 
-const DEFAULT_QS_URL = 'http://nefarian.xray.aps.anl.gov:60610';
-
-function loadQsUrl() {
-  const saved = localStorage.getItem('qsUrl') ?? DEFAULT_QS_URL;
-  return saved.startsWith('http://') || saved.startsWith('https://') ? saved : DEFAULT_QS_URL;
-}
-
-export default function QServerPanel() {
-  // inputUrl is what the user typed (raw http://host:port)
-  // proxyUrl is what we actually fetch against (routed through vite proxy)
-  const [inputUrl, setInputUrl] = useState(loadQsUrl);
-  const [proxyUrl, setProxyUrl] = useState(() => toProxyUrl(loadQsUrl()));
-  const [inputApiKey, setInputApiKey] = useState(() => localStorage.getItem('qsApiKey') ?? '');
+export default function QServerPanel({ proxyUrl, serverUrl, onStatusChange }: {
+  proxyUrl: string;
+  serverUrl: string;
+  onStatusChange?: (status: ServerStatus | null) => void;
+}) {
 
   const [status, setStatus] = useState<ServerStatus | null>(null);
   const [queue, setQueue] = useState<QueueItem[]>([]);
@@ -219,12 +207,14 @@ export default function QServerPanel() {
     setParamValues(init);
   }, [selectedPlan, allowedPlans]);
 
+  // ── Report status to parent ───────────────────────────────────────────────
+  useEffect(() => { onStatusChange?.(status); }, [status, onStatusChange]);
+
   // ── WebSocket console (direct connection — no proxy for WS) ──────────────
   useEffect(() => {
     if (!consoleOn) { wsRef.current?.close(); return; }
     // The vite proxy doesn't handle WS upgrades, connect directly to the server
-    const raw = loadQsUrl();
-    const wsUrl = raw.replace(/^https/, 'wss').replace(/^http/, 'ws') + '/api/console_output/ws';
+    const wsUrl = serverUrl.replace(/^https/, 'wss').replace(/^http/, 'ws') + '/api/console_output/ws';
     let ws: WebSocket | null = null;
     try { ws = new WebSocket(wsUrl); } catch { return; }
     const _ws = ws;
@@ -240,25 +230,13 @@ export default function QServerPanel() {
     };
     _ws.onerror = () => {};
     return () => { _ws.close(); };
-  }, [proxyUrl, consoleOn]);
+  }, [serverUrl, consoleOn]);
 
   useEffect(() => {
     consoleEndRef.current?.scrollIntoView({ behavior: 'smooth' });
   }, [consoleLines]);
 
   // ── Actions ──────────────────────────────────────────────────────────────
-  const handleConnect = () => {
-    const url = inputUrl.replace(/\/$/, '');
-    localStorage.setItem('qsUrl', url);
-    localStorage.setItem('qsApiKey', inputApiKey);
-    setProxyUrl(toProxyUrl(url));
-    setConsoleLines([]);
-    setStatus(null);
-    setQueue([]);
-    setHistory([]);
-    setAllowedPlans([]);
-  };
-
   const handleStartRE = async () => {
     try {
       if (!status?.worker_environment_exists) {
@@ -323,48 +301,11 @@ export default function QServerPanel() {
   // ── Derived state ────────────────────────────────────────────────────────
   const isRERunning = status?.re_state === 'running';
   const isREIdle = status?.re_state === 'idle' || !status?.worker_environment_exists;
-  const managerState = status?.manager_state ?? '—';
   const reState = status?.re_state ?? '—';
   const activePlan = allowedPlans.find(p => p.name === selectedPlan);
 
   return (
     <div className="flex flex-col h-full overflow-hidden">
-      {/* QServer connection bar */}
-      <div className="flex-none bg-gray-800 px-4 py-2 space-y-1.5">
-        <div className="flex items-center gap-3">
-          <span className="text-gray-400 text-xs font-medium shrink-0 w-16 text-right">HTTP URL</span>
-          <input
-            className="bg-gray-700 text-white text-xs px-2 py-1 rounded border border-gray-600 focus:outline-none focus:border-sky-400 flex-1 placeholder:text-gray-500 font-mono"
-            value={inputUrl}
-            onChange={e => setInputUrl(e.target.value)}
-            onKeyDown={e => e.key === 'Enter' && handleConnect()}
-            placeholder="http://localhost:60610"
-          />
-          <span className="text-gray-500 text-xs font-medium shrink-0 w-14 text-right">API Key</span>
-          <input
-            className="bg-gray-700 text-white text-xs px-2 py-1 rounded border border-gray-600 focus:outline-none focus:border-sky-400 w-48 placeholder:text-gray-500 font-mono"
-            value={inputApiKey}
-            onChange={e => setInputApiKey(e.target.value)}
-            onKeyDown={e => e.key === 'Enter' && handleConnect()}
-            placeholder="(optional)"
-            type="password"
-          />
-          <button
-            onClick={handleConnect}
-            className="bg-sky-600 hover:bg-sky-500 text-white text-sm px-3 py-1 rounded font-medium transition-colors shrink-0"
-          >Connect</button>
-          {status ? (
-            <div className="flex items-center gap-3 text-xs">
-              <span className="text-gray-400">Manager: <span className={`font-mono font-medium ${managerState === 'idle' ? 'text-green-400' : 'text-amber-400'}`}>{managerState}</span></span>
-              <span className="text-gray-400">RE: <span className={`font-mono font-medium ${reState === 'idle' ? 'text-green-400' : reState === 'running' ? 'text-sky-400 animate-pulse' : 'text-amber-400'}`}>{reState}</span></span>
-              <span className="text-gray-400">Queue: <span className="text-white font-medium">{status.items_in_queue}</span></span>
-            </div>
-          ) : (
-            <span className="text-xs text-gray-500">Not connected</span>
-          )}
-        </div>
-      </div>
-
       {/* Body */}
       <div className="flex-1 flex overflow-hidden">
         {/* Left sidebar: Queue + RE + History */}
