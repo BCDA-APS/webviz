@@ -79,6 +79,58 @@ function tiledProxyPlugin(): Plugin {
   };
 }
 
+function qserverProxyPlugin(): Plugin {
+  return {
+    name: 'qserver-proxy',
+    configureServer(server) {
+      // HTTP proxy: /qs-proxy/http/host:port/... → http://host:port/...
+      server.middlewares.use('/qs-proxy', (req, res) => {
+        const url = req.url ?? '/';
+        const match = url.match(/^\/?([^/]+)\/([^/]+)(\/.*)?$/);
+        if (!match) {
+          res.writeHead(400);
+          res.end('Bad proxy URL — expected /qs-proxy/<protocol>/<host:port>/...');
+          return;
+        }
+
+        const protocol = match[1];
+        const host = match[2];
+        const path = match[3] ?? '/';
+        const [hostname, portStr] = host.split(':');
+        const port = portStr ? parseInt(portStr) : (protocol === 'https' ? 443 : 80);
+
+        const transport = protocol === 'https' ? https : http;
+        const proxyReqHeaders = { ...req.headers, host };
+        delete proxyReqHeaders['accept-encoding'];
+
+        const chunks: Buffer[] = [];
+        req.on('data', (chunk: Buffer) => chunks.push(chunk));
+        req.on('end', () => {
+          const body = Buffer.concat(chunks);
+          const proxyReq = transport.request(
+            { hostname, port, path, method: req.method, headers: { ...proxyReqHeaders, 'content-length': body.length } },
+            (proxyRes) => {
+              const respChunks: Buffer[] = [];
+              proxyRes.on('data', (chunk: Buffer) => respChunks.push(chunk));
+              proxyRes.on('end', () => {
+                const respBody = Buffer.concat(respChunks);
+                const headers = { ...proxyRes.headers };
+                headers['content-length'] = String(respBody.length);
+                headers['access-control-allow-origin'] = '*';
+                delete headers['content-encoding'];
+                res.writeHead(proxyRes.statusCode ?? 200, headers);
+                res.end(respBody);
+              });
+            }
+          );
+          proxyReq.on('error', (err) => { res.writeHead(502); res.end(`Proxy error: ${err.message}`); });
+          proxyReq.end(body);
+        });
+      });
+    },
+  };
+}
+
 export default defineConfig({
-  plugins: [react(), tiledProxyPlugin()],
+  plugins: [react(), tiledProxyPlugin(), qserverProxyPlugin()],
 });

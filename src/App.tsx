@@ -6,6 +6,7 @@ import AnalysisPanel from './components/AnalysisPanel';
 import RunDataTab from './components/RunDataTab';
 import RunMetadataTab from './components/RunMetadataTab';
 import RunSummaryTab from './components/RunSummaryTab';
+import QServerPanel from './components/QServerPanel';
 import type { Panel, XYTrace, TraceStyle } from './types';
 import { fitData, MODEL_NAMES } from './fitting';
 import type { FitResult } from './fitting';
@@ -57,12 +58,16 @@ export default function App() {
   const [analysisPosition, setAnalysisPosition] = useState<'right' | 'bottom'>('right');
   const [xLog, setXLog] = useState(false);
   const [yLog, setYLog] = useState(false);
-  const [fitModel, setFitModel] = useState(MODEL_NAMES[0]);
+  const [fitModel, setFitModel] = useState(() => {
+    const saved = localStorage.getItem('fitModel');
+    return saved && MODEL_NAMES.includes(saved) ? saved : MODEL_NAMES[0];
+  });
   const [activeTraceIndex, setActiveTraceIndex] = useState(0);
   const [fitResults, setFitResults] = useState<FitResult | null>(null);
   const [showDerivative, setShowDerivative] = useState(false);
   const [smoothingWindow, setSmoothingWindow] = useState(1);
   const [centerTab, setCenterTab] = useState<'graph' | 'data' | 'metadata' | 'summary'>('graph');
+  const [appTab, setAppTab] = useState<'visualizer' | 'qserver'>('visualizer');
   const [traceStyles, setTraceStyles] = useState<TraceStyle[]>([]);
   const [cursor1, setCursor1] = useState<number | null>(null);
   const [cursor1Y, setCursor1Y] = useState<number | null>(null);
@@ -309,45 +314,71 @@ export default function App() {
   return (
     <div className="flex flex-col h-screen w-screen overflow-hidden bg-gray-50">
       {/* Header */}
-      <header className="flex-none h-16 bg-sky-950 flex items-center px-6 gap-4 shadow-md z-10">
-        <h1 className="text-white text-xl font-semibold tracking-wide">Tiled Visualizer</h1>
-        <div className="ml-auto flex items-center gap-2">
-          <label className="text-sky-300 text-xs font-medium">Server</label>
-          <input
-            className="bg-sky-900 text-white text-sm px-3 py-1.5 rounded border border-sky-700 focus:outline-none focus:border-sky-400 w-72 placeholder:text-sky-500"
-            value={inputUrl}
-            onChange={(e) => setInputUrl(e.target.value)}
-            onKeyDown={(e) => e.key === 'Enter' && handleConnect()}
-            placeholder="http://localhost:8000"
-          />
-          <button
-            onClick={handleConnect}
-            className="bg-sky-600 hover:bg-sky-500 active:bg-sky-700 text-white text-sm px-4 py-1.5 rounded font-medium transition-colors"
-          >
-            Connect
-          </button>
-
-          {catalogs.length > 0 && (
-            <>
-              <div className="w-px h-6 bg-sky-700 mx-1" />
-              <label className="text-sky-300 text-xs font-medium">Catalog</label>
-              <select
-                value={selectedCatalog}
-                onChange={(e) => { setSelectedCatalog(e.target.value); setSelectedRunId(''); setSelectedRunLabel(''); setRunPage(0); }}
-                className="bg-sky-900 text-white text-sm px-3 py-1.5 rounded border border-sky-700 focus:outline-none focus:border-sky-400"
-              >
-                <option value="">— root —</option>
-                {catalogs.map((name) => (
-                  <option key={name} value={name}>{name}</option>
-                ))}
-              </select>
-            </>
-          )}
+      <header className="flex-none h-12 bg-sky-950 flex items-center px-4 gap-4 shadow-md z-10">
+        {/* App tabs */}
+        <div className="flex items-end h-full gap-0.5 pt-1.5">
+          {(['visualizer', 'qserver'] as const).map(tab => (
+            <button
+              key={tab}
+              onClick={() => setAppTab(tab)}
+              className={`px-4 h-full text-sm font-medium rounded-t transition-colors ${
+                appTab === tab
+                  ? 'bg-gray-50 text-sky-900'
+                  : 'text-sky-300 hover:text-white hover:bg-sky-800'
+              }`}
+            >
+              {tab === 'visualizer' ? 'Visualizer' : 'Queue Server'}
+            </button>
+          ))}
         </div>
+
+        {/* Tiled server controls (visualizer only) */}
+        {appTab === 'visualizer' && (
+          <div className="ml-auto flex items-center gap-2">
+            <label className="text-sky-300 text-xs font-medium">Server</label>
+            <input
+              className="bg-sky-900 text-white text-sm px-3 py-1.5 rounded border border-sky-700 focus:outline-none focus:border-sky-400 w-72 placeholder:text-sky-500"
+              value={inputUrl}
+              onChange={(e) => setInputUrl(e.target.value)}
+              onKeyDown={(e) => e.key === 'Enter' && handleConnect()}
+              placeholder="http://localhost:8000"
+            />
+            <button
+              onClick={handleConnect}
+              className="bg-sky-600 hover:bg-sky-500 active:bg-sky-700 text-white text-sm px-4 py-1.5 rounded font-medium transition-colors"
+            >
+              Connect
+            </button>
+
+            {catalogs.length > 0 && (
+              <>
+                <div className="w-px h-6 bg-sky-700 mx-1" />
+                <label className="text-sky-300 text-xs font-medium">Catalog</label>
+                <select
+                  value={selectedCatalog}
+                  onChange={(e) => { setSelectedCatalog(e.target.value); setSelectedRunId(''); setSelectedRunLabel(''); setRunPage(0); }}
+                  className="bg-sky-900 text-white text-sm px-3 py-1.5 rounded border border-sky-700 focus:outline-none focus:border-sky-400"
+                >
+                  <option value="">— root —</option>
+                  {catalogs.map((name) => (
+                    <option key={name} value={name}>{name}</option>
+                  ))}
+                </select>
+              </>
+            )}
+          </div>
+        )}
       </header>
 
-      {/* Body */}
-      <div className="flex flex-1 overflow-hidden">
+      {/* Queue Server tab */}
+      {appTab === 'qserver' && (
+        <div className="flex-1 overflow-hidden">
+          <QServerPanel />
+        </div>
+      )}
+
+      {/* Visualizer body */}
+      <div className={`flex flex-1 overflow-hidden ${appTab !== 'visualizer' ? 'hidden' : ''}`}>
         {/* Sidebar */}
         <aside
           className="flex-none bg-white overflow-hidden flex flex-col transition-none"
@@ -535,7 +566,7 @@ export default function App() {
                 activeX={activeTrace?.x ?? []} activeY={activeTrace?.y ?? []}
                 showDerivative={showDerivative} onShowDerivativeChange={setShowDerivative}
                 smoothingWindow={smoothingWindow} onSmoothingWindowChange={setSmoothingWindow}
-                fitModel={fitModel} onFitModelChange={m => { setFitModel(m); setFitResults(null); }}
+                fitModel={fitModel} onFitModelChange={m => { setFitModel(m); localStorage.setItem('fitModel', m); setFitResults(null); }}
                 fitResults={fitResults} onFit={handleFit} onClearFit={() => setFitResults(null)}
                 cursor1={cursor1} cursor2={cursor2} cursor1Y={cursor1Y} cursor2Y={cursor2Y}
                 snapToData={snapToData} fitBetweenCursors={fitBetweenCursors}
@@ -636,7 +667,7 @@ export default function App() {
                 activeX={activeTrace?.x ?? []} activeY={activeTrace?.y ?? []}
                 showDerivative={showDerivative} onShowDerivativeChange={setShowDerivative}
                 smoothingWindow={smoothingWindow} onSmoothingWindowChange={setSmoothingWindow}
-                fitModel={fitModel} onFitModelChange={m => { setFitModel(m); setFitResults(null); }}
+                fitModel={fitModel} onFitModelChange={m => { setFitModel(m); localStorage.setItem('fitModel', m); setFitResults(null); }}
                 fitResults={fitResults} onFit={handleFit} onClearFit={() => setFitResults(null)}
                 cursor1={cursor1} cursor2={cursor2} cursor1Y={cursor1Y} cursor2Y={cursor2Y}
                 snapToData={snapToData} fitBetweenCursors={fitBetweenCursors}
