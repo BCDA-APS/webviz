@@ -187,6 +187,8 @@ export default function App() {
 
   const plot = useCallback((traces: XYTrace[], title: string) => {
     setPanel({ id: crypto.randomUUID(), type: 'xy' as const, traces, title });
+    setFitResults(null);
+    setShowDerivative(false);
   }, []);
 
   const livePlot = useCallback((traces: XYTrace[], title: string, stream: string, dataSubNode: string, dataNodeFamily: 'array' | 'table') => {
@@ -194,6 +196,8 @@ export default function App() {
       id: crypto.randomUUID(), type: 'xy' as const, traces, title,
       liveConfig: { serverUrl, catalog: selectedCatalog, stream, runId: selectedRunId, dataSubNode, dataNodeFamily },
     });
+    setFitResults(null);
+    setShowDerivative(false);
   }, [serverUrl, selectedCatalog, selectedRunId]);
 
   const stopLive = useCallback(() => {
