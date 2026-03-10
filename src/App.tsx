@@ -32,6 +32,85 @@ function computeDerivative(xs: number[], ys: number[], w: number): { x: number[]
   return { x: sx, y: dy };
 }
 
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+const _parseArrayFields = (json: any): string[] =>
+  (json.data ?? []).filter((i: any) => i.attributes?.structure_family === 'array').map((i: any) => i.id);
+
+async function fetchRunTraces(
+  serverUrl: string, catalog: string, runId: string, runLabel: string,
+  detectors: string[], motors: string[],
+  preferX: string, preferYs: string[],
+): Promise<XYTrace[]> {
+  const matchesDev = (name: string, devs: string[]) => devs.some(d => name === d || name.startsWith(d + '_'));
+
+  // 1. Streams
+  const sj = await fetch(`${serverUrl}/api/v1/search/${catalog}/${runId}?page[limit]=50`).then(r => r.json());
+  const streams: string[] = (sj.data ?? []).map((i: any) => i.id); // eslint-disable-line @typescript-eslint/no-explicit-any
+  const stream = streams.includes('primary') ? 'primary' : (streams[0] ?? '');
+  if (!stream) throw new Error('no streams');
+
+  // 2. Fields — handle array / table / sub-node layouts
+  let subNode = '', family: 'array' | 'table' = 'array', fieldNames: string[] = [];
+  const fj = await fetch(`${serverUrl}/api/v1/search/${catalog}/${runId}/${stream}?page[limit]=200`).then(r => r.json());
+  const arrays = _parseArrayFields(fj);
+  if (arrays.length > 0) {
+    fieldNames = arrays;
+  } else {
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const tbl = (fj.data ?? []).find((i: any) => i.attributes?.structure_family === 'table');
+    if (tbl) {
+      subNode = tbl.id; family = 'table';
+      fieldNames = tbl.attributes?.structure?.columns ?? [];
+    } else {
+      for (const sub of ['data', 'internal']) {
+        try {
+          const sj2 = await fetch(`${serverUrl}/api/v1/search/${catalog}/${runId}/${stream}/${sub}?page[limit]=200`).then(r => r.json());
+          const fs = _parseArrayFields(sj2);
+          if (fs.length > 0) { subNode = sub; fieldNames = fs; break; }
+        } catch { /* continue */ }
+      }
+    }
+  }
+  if (fieldNames.length === 0) throw new Error('no fields');
+
+  const fieldSet = new Set(fieldNames);
+
+  // 3. Resolve X/Y — prefer matching fields, fall back progressively to any available field
+  const x = fieldSet.has(preferX) ? preferX
+    : (fieldNames.find(f => f !== 'time' && matchesDev(f, motors))
+      ?? fieldNames.find(f => f !== 'time')
+      ?? fieldNames[0]
+      ?? '');
+  const validPreferYs = preferYs.filter(y => fieldSet.has(y) && y !== x);
+  const ys = validPreferYs.length > 0 ? validPreferYs
+    : (() => {
+        const detY = fieldNames.find(f => matchesDev(f, detectors) && f !== x);
+        if (detY) return [detY];
+        const anyY = fieldNames.find(f => f !== x);
+        return anyY ? [anyY] : [];
+      })();
+  if (!x || ys.length === 0) throw new Error('no X or Y');
+
+  // 4. Fetch data
+  const subPath = subNode ? `/${subNode}` : '';
+  if (family === 'table') {
+    const tj = await fetch(`${serverUrl}/api/v1/table/full/${catalog}/${runId}/${stream}${subPath}?format=application/json`).then(r => r.json());
+    const seqNums: number[] = tj.seq_num ?? [];
+    const nRows = seqNums.length > 0 ? (seqNums.findIndex((s: number) => s === 0) === -1 ? seqNums.length : seqNums.findIndex((s: number) => s === 0)) : undefined;
+    return ys.map(yf => ({
+      x: nRows !== undefined ? (tj[x] ?? []).slice(0, nRows) : (tj[x] ?? []),
+      y: nRows !== undefined ? (tj[yf] ?? []).slice(0, nRows) : (tj[yf] ?? []),
+      xLabel: x, yLabel: yf, runLabel, runId,
+    }));
+  }
+  const base = `${serverUrl}/api/v1/array/full/${catalog}/${runId}/${stream}${subPath}`;
+  const [xData, ...yDatas] = await Promise.all([
+    fetch(`${base}/${x}?format=application/json`).then(r => r.json()),
+    ...ys.map(yf => fetch(`${base}/${yf}?format=application/json`).then(r => r.json())),
+  ]);
+  return ys.map((yf, i) => ({ x: xData, y: yDatas[i], xLabel: x, yLabel: yf, runLabel, runId }));
+}
+
 const DEFAULT_QS_URL = 'http://nefarian.xray.aps.anl.gov:60610';
 function loadQsUrl() {
   const saved = localStorage.getItem('qsUrl') ?? DEFAULT_QS_URL;
@@ -92,6 +171,11 @@ export default function App() {
   const [snapToData, setSnapToData] = useState(true);
   const [fitBetweenCursors, setFitBetweenCursors] = useState(false);
   const fieldSelectorRef = useRef<FieldSelectorHandle>(null);
+  const sidebarRef = useRef<HTMLElement>(null);
+  const [addRunId, setAddRunId] = useState<string | null>(null);
+  const [addRunError, setAddRunError] = useState<string | null>(null);
+  const panelRef = useRef(panel);
+  useEffect(() => { panelRef.current = panel; }, [panel]);
 
   const [derivativeTraces, setDerivativeTraces] = useState<XYTrace[]>([]);
   // Track derivative source by identity so adding/removing other traces doesn't shift it
@@ -284,6 +368,29 @@ export default function App() {
     });
   }, []);
 
+  const handleShiftClickRun = useCallback(async (runId: string, label: string, detectors: string[], motors: string[]) => {
+    const currentPanel = panelRef.current;
+    const hasGraph = currentPanel?.type === 'xy' && currentPanel.traces.length > 0;
+    const preferX = hasGraph ? currentPanel!.traces[0].xLabel : '';
+    const preferYs = hasGraph ? [...new Set(currentPanel!.traces.map(t => t.yLabel))] : [];
+    setAddRunId(runId);
+    setAddRunError(null);
+    try {
+      const traces = await fetchRunTraces(serverUrl, selectedCatalog, runId, label, detectors, motors, preferX, preferYs);
+      if (hasGraph) {
+        addTraces(traces);
+      } else {
+        plot(traces, label || runId.slice(0, 7));
+      }
+      setCenterTab('graph');
+    } catch (e) {
+      setAddRunError(`Could not add run ${label || runId.slice(0, 7)}: ${e instanceof Error ? e.message : 'unknown error'}`);
+      setTimeout(() => setAddRunError(null), 6000);
+    } finally {
+      setAddRunId(null);
+    }
+  }, [serverUrl, selectedCatalog, addTraces, plot]);
+
   const removeTrace = useCallback((index: number) => {
     setPanel((prev) => {
       if (!prev || prev.type !== 'xy') return prev;
@@ -291,6 +398,24 @@ export default function App() {
       return traces.length === 0 ? null : { ...prev, traces };
     });
   }, []);
+
+  const removeRunTraces = useCallback((runId: string) => {
+    setPanel((prev) => {
+      if (!prev || prev.type !== 'xy') return prev;
+      const traces = prev.traces.filter(t => t.runId !== runId);
+      return traces.length === 0 ? null : { ...prev, traces };
+    });
+  }, []);
+
+  const handleRemoveTrace = useCallback((index: number) => {
+    if (panel?.type === 'xy') {
+      const trace = panel.traces[index];
+      if (trace && trace.runId === selectedRunId) {
+        fieldSelectorRef.current?.removeY(trace.yLabel);
+      }
+    }
+    removeTrace(index);
+  }, [panel, selectedRunId, removeTrace]);
 
   const handleDividerMouseDown = useCallback((e: React.MouseEvent) => {
     e.preventDefault();
@@ -353,11 +478,12 @@ export default function App() {
 
   const handleRunsDividerMouseDown = useCallback((e: React.MouseEvent) => {
     e.preventDefault();
-    const startY = e.clientY;
-    const startHeight = runsHeight;
 
     const onMouseMove = (e: MouseEvent) => {
-      const newHeight = Math.max(80, Math.min(600, startHeight + e.clientY - startY));
+      const headerH = 48; // h-12 header
+      const relY = e.clientY - headerH;
+      const maxH = window.innerHeight - headerH - 72;
+      const newHeight = Math.max(20, Math.min(maxH, relY));
       setRunsHeight(newHeight);
     };
 
@@ -368,7 +494,7 @@ export default function App() {
 
     document.addEventListener('mousemove', onMouseMove);
     document.addEventListener('mouseup', onMouseUp);
-  }, [runsHeight]);
+  }, []);
 
   return (
     <div className="flex flex-col h-screen w-screen overflow-hidden bg-gray-50">
@@ -505,6 +631,7 @@ export default function App() {
       <div className={`flex flex-1 overflow-hidden ${appTab !== 'visualizer' ? 'hidden' : ''}`}>
         {/* Sidebar */}
         <aside
+          ref={sidebarRef}
           className="flex-none bg-white overflow-hidden flex flex-col transition-none"
           style={{ width: sidebarCollapsed ? 0 : sidebarWidth }}
         >
@@ -541,6 +668,9 @@ export default function App() {
                     setSelectedRunAcquiring(acquiring);
                     if (!acquiring) fieldSelectorRef.current?.schedulePlot();
                   }}
+                  onShiftClickRun={handleShiftClickRun}
+                  loadingRunId={addRunId}
+                  addRunError={addRunError}
                   onAutoFollowChange={setAutoFollow}
                   onNewAcquiringRun={(id, label, dets, motors, acquiring) => {
                     if (!autoFollow) return;
@@ -559,7 +689,7 @@ export default function App() {
                     className="flex-none h-1 cursor-row-resize bg-gray-200 hover:bg-sky-400 transition-colors"
                     onMouseDown={handleRunsDividerMouseDown}
                   />
-                  <div className="flex-1 overflow-hidden">
+                  <div className="flex-1 min-h-0 overflow-hidden">
                     <FieldSelector
                       ref={fieldSelectorRef}
                       serverUrl={serverUrl}
@@ -572,6 +702,7 @@ export default function App() {
                       onPlot={plot}
                       onAddTraces={panel?.type === 'xy' ? addTraces : null}
                       onLivePlot={livePlot}
+                      onRemoveRunTraces={removeRunTraces}
                     />
                   </div>
                 </>
@@ -628,7 +759,7 @@ export default function App() {
               <div className="flex-1 overflow-hidden p-4">
                 {centerTab === 'graph' && (
                   panel ? (
-                    <VisualizationPanel panel={panel} onRemove={() => { setPanel(null); setFitResults(null); }} onRemoveTrace={removeTrace} onStopLive={stopLive} onLiveTracesUpdate={handleLiveTracesUpdate} extraTraces={derivativeTraces} onRemoveExtraTrace={() => setShowDerivative(false)} xLog={xLog} yLog={yLog} fitResults={fitResults} traceStyles={traceStyles} cursor1={cursor1} cursor2={cursor2} cursor1Y={cursor1Y} cursor2Y={cursor2Y} onPlotClick={handlePlotClick} />
+                    <VisualizationPanel panel={panel} onRemove={() => { setPanel(null); setFitResults(null); }} onRemoveTrace={handleRemoveTrace} onStopLive={stopLive} onLiveTracesUpdate={handleLiveTracesUpdate} extraTraces={derivativeTraces} onRemoveExtraTrace={() => setShowDerivative(false)} xLog={xLog} yLog={yLog} fitResults={fitResults} traceStyles={traceStyles} cursor1={cursor1} cursor2={cursor2} cursor1Y={cursor1Y} cursor2Y={cursor2Y} onPlotClick={handlePlotClick} />
                   ) : (
                     <div className="h-full flex flex-col items-center justify-center text-gray-400 select-none">
                       <svg className="h-16 w-16 mb-4 opacity-30" fill="none" viewBox="0 0 24 24" stroke="currentColor">
@@ -729,7 +860,7 @@ export default function App() {
               <div className="flex-1 overflow-hidden p-4">
                 {centerTab === 'graph' && (
                   panel ? (
-                    <VisualizationPanel panel={panel} onRemove={() => { setPanel(null); setFitResults(null); }} onRemoveTrace={removeTrace} onStopLive={stopLive} onLiveTracesUpdate={handleLiveTracesUpdate} extraTraces={derivativeTraces} onRemoveExtraTrace={() => setShowDerivative(false)} xLog={xLog} yLog={yLog} fitResults={fitResults} traceStyles={traceStyles} cursor1={cursor1} cursor2={cursor2} cursor1Y={cursor1Y} cursor2Y={cursor2Y} onPlotClick={handlePlotClick} />
+                    <VisualizationPanel panel={panel} onRemove={() => { setPanel(null); setFitResults(null); }} onRemoveTrace={handleRemoveTrace} onStopLive={stopLive} onLiveTracesUpdate={handleLiveTracesUpdate} extraTraces={derivativeTraces} onRemoveExtraTrace={() => setShowDerivative(false)} xLog={xLog} yLog={yLog} fitResults={fitResults} traceStyles={traceStyles} cursor1={cursor1} cursor2={cursor2} cursor1Y={cursor1Y} cursor2Y={cursor2Y} onPlotClick={handlePlotClick} />
                   ) : (
                     <div className="h-full flex flex-col items-center justify-center text-gray-400 select-none">
                       <svg className="h-16 w-16 mb-4 opacity-30" fill="none" viewBox="0 0 24 24" stroke="currentColor">

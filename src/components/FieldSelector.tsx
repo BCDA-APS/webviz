@@ -17,14 +17,15 @@ type FieldSelectorProps = {
   onPlot: (traces: XYTrace[], title: string) => void;
   onAddTraces: ((traces: XYTrace[]) => void) | null;
   onLivePlot: ((traces: XYTrace[], title: string, stream: string, dataSubNode: string, dataNodeFamily: 'array' | 'table') => void) | null;
+  onRemoveRunTraces?: (runId: string) => void;
 };
 
-export type FieldSelectorHandle = { schedulePlot: () => void; scheduleLive: () => void };
+export type FieldSelectorHandle = { schedulePlot: () => void; scheduleLive: () => void; removeY: (yLabel: string) => void };
 
 const FieldSelector = forwardRef<FieldSelectorHandle, FieldSelectorProps>(function FieldSelector({
   serverUrl, catalog, runId, runLabel,
   runDetectors, runMotors, runAcquiring,
-  onPlot, onAddTraces, onLivePlot,
+  onPlot, onAddTraces, onLivePlot, onRemoveRunTraces,
 }, ref) {
   const [streams, setStreams] = useState<string[]>([]);
   const [selectedStream, setSelectedStream] = useState('');
@@ -34,12 +35,17 @@ const FieldSelector = forwardRef<FieldSelectorHandle, FieldSelectorProps>(functi
   const [loading, setLoading] = useState(false);
   const lastXRef = useRef('');
   const lastYRef = useRef<string[]>([]);
+  // True after we removed traces via onRemoveRunTraces, so the next Y check re-creates the panel
+  const removedTracesRef = useRef(false);
   const [adding, setAdding] = useState(false);
   const [error, setError] = useState('');
   const [pendingAction, setPendingAction] = useState<'plot' | 'live' | null>(null);
   const [dataSubNode, setDataSubNode] = useState('');
   const [dataNodeFamily, setDataNodeFamily] = useState<'array' | 'table'>('array');
   const [livePointCount, setLivePointCount] = useState<number | null>(null);
+
+  // Reset removedTracesRef when the run changes so it doesn't bleed into the next run
+  useEffect(() => { removedTracesRef.current = false; }, [runId]);
 
   // Fetch streams for this run
   useEffect(() => {
@@ -157,17 +163,25 @@ const FieldSelector = forwardRef<FieldSelectorHandle, FieldSelectorProps>(functi
   const selectXField = (name: string) => {
     lastXRef.current = name;
     setXField(name);
+    if (onAddTraces) handlePlot(name, yFields);
   };
 
   const toggleYField = (name: string) => {
-    setYFields(prev => {
-      const next = prev.includes(name) ? prev.filter(n => n !== name) : [...prev, name];
-      lastYRef.current = next;
-      return next;
-    });
+    const next = yFields.includes(name) ? yFields.filter(n => n !== name) : [...yFields, name];
+    lastYRef.current = next;
+    setYFields(next);
+    if (onAddTraces || removedTracesRef.current) {
+      if (next.length > 0) {
+        removedTracesRef.current = false;
+        handlePlot(xField, next);
+      } else {
+        removedTracesRef.current = true;
+        onRemoveRunTraces?.(runId);
+      }
+    }
   };
 
-  const fetchAllTraces = async (): Promise<XYTrace[]> => {
+  const fetchAllTraces = async (x: string, ys: string[]): Promise<XYTrace[]> => {
     const subPath = dataSubNode ? `/${dataSubNode}` : '';
     if (dataNodeFamily === 'table') {
       const resp = await fetch(`${serverUrl}/api/v1/table/full/${catalog}/${runId}/${selectedStream}${subPath}?format=application/json`);
@@ -175,31 +189,29 @@ const FieldSelector = forwardRef<FieldSelectorHandle, FieldSelectorProps>(functi
       const table = await resp.json();
       const seqNums: number[] = table.seq_num ?? [];
       const nRows = seqNums.length > 0 ? (seqNums.findIndex(s => s === 0) === -1 ? seqNums.length : seqNums.findIndex(s => s === 0)) : undefined;
-      return yFields.map(yf => {
+      return ys.map(yf => {
         const yArr = nRows !== undefined ? (table[yf] ?? []).slice(0, nRows) : (table[yf] ?? []);
-        const xArr = nRows !== undefined ? (table[xField] ?? []).slice(0, nRows) : (table[xField] ?? []);
-        return { x: xArr, y: yArr, xLabel: xField, yLabel: yf, runLabel, runId };
+        const xArr = nRows !== undefined ? (table[x] ?? []).slice(0, nRows) : (table[x] ?? []);
+        return { x: xArr, y: yArr, xLabel: x, yLabel: yf, runLabel, runId };
       });
     }
     const base = `${serverUrl}/api/v1/array/full/${catalog}/${runId}/${selectedStream}${subPath}`;
-    const yResps = await Promise.all(yFields.map(yf => fetch(`${base}/${yf}?format=application/json`)));
+    const yResps = await Promise.all(ys.map(yf => fetch(`${base}/${yf}?format=application/json`)));
     if (yResps.some(r => !r.ok)) throw new Error('Fetch failed');
     const yDatas: number[][] = await Promise.all(yResps.map(r => r.json()));
-    const xResp = await fetch(`${base}/${xField}?format=application/json`);
+    const xResp = await fetch(`${base}/${x}?format=application/json`);
     if (!xResp.ok) throw new Error('Fetch failed');
     const xData: number[] = await xResp.json();
-    return yFields.map((yf, i) => ({ x: xData, y: yDatas[i], xLabel: xField, yLabel: yf, runLabel, runId }));
+    return ys.map((yf, i) => ({ x: xData, y: yDatas[i], xLabel: x, yLabel: yf, runLabel, runId }));
   };
 
-  const handlePlot = async () => {
-    if (!xField || yFields.length === 0 || adding) return;
+  const handlePlot = async (x = xField, ys = yFields) => {
+    if (!x || ys.length === 0 || adding) return;
     setAdding(true);
     setError('');
     try {
-      const traces = await fetchAllTraces();
-      const title = yFields.length === 1
-        ? `${yFields[0]} vs ${xField}`
-        : `${yFields.join(', ')} vs ${xField}`;
+      const traces = await fetchAllTraces(x, ys);
+      const title = ys.length === 1 ? `${ys[0]} vs ${x}` : `${ys.join(', ')} vs ${x}`;
       onPlot(traces, title);
     } catch {
       setError('Failed to fetch data');
@@ -254,6 +266,13 @@ const FieldSelector = forwardRef<FieldSelectorHandle, FieldSelectorProps>(functi
   useImperativeHandle(ref, () => ({
     schedulePlot: () => setPendingAction('plot'),
     scheduleLive: () => setPendingAction('live'),
+    removeY: (yLabel: string) => {
+      setYFields(prev => {
+        const next = prev.filter(y => y !== yLabel);
+        lastYRef.current = next;
+        return next;
+      });
+    },
   }), []);
 
   // Fetch table row count for shape display — polls every 2s while acquiring, once when completed
@@ -287,7 +306,7 @@ const FieldSelector = forwardRef<FieldSelectorHandle, FieldSelectorProps>(functi
     setAdding(true);
     setError('');
     try {
-      const traces = await fetchAllTraces();
+      const traces = await fetchAllTraces(xField, yFields);
       const title = yFields.length === 1
         ? `${yFields[0]} vs ${xField}`
         : `${yFields.join(', ')} vs ${xField}`;
@@ -304,7 +323,7 @@ const FieldSelector = forwardRef<FieldSelectorHandle, FieldSelectorProps>(functi
     setAdding(true);
     setError('');
     try {
-      const traces = await fetchAllTraces();
+      const traces = await fetchAllTraces(xField, yFields);
       onAddTraces(traces);
     } catch {
       setError('Failed to fetch data');
