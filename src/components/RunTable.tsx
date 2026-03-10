@@ -199,6 +199,7 @@ export default function RunTable({ serverUrl, catalog, page, selectedRunId, auto
   const [debouncedFilters, setDebouncedFilters] = useState<Filters>(EMPTY_FILTERS);
   const [minDateMs, setMinDateMs] = useState(new Date('2000-01-01').getTime());
   const [refreshKey, setRefreshKey] = useState(0);
+  const [sortDesc, setSortDesc] = useState(true);
   const bgRefreshRef = useRef(false);
   const loadingRef = useRef(false);
   // keyPrefix: 'start.' for tiled 0.2.8+ (nested metadata keys), '' for tiled 0.2.3 (flat).
@@ -277,12 +278,12 @@ export default function RunTable({ serverUrl, catalog, page, selectedRunId, auto
     return () => clearTimeout(t);
   }, [filters]);
 
-  // Reset to page 0 whenever the active filter changes
+  // Reset to page 0 whenever the active filter or sort order changes
   const filterKey = useMemo(() => JSON.stringify(debouncedFilters), [debouncedFilters]);
   useEffect(() => {
     onPageChange(0);
   // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [filterKey]);
+  }, [filterKey, sortDesc]);
 
   useEffect(() => {
     if (!serverUrl || catalog === null) { setRuns([]); setTotal(0); setLoading(false); return; }
@@ -318,11 +319,17 @@ export default function RunTable({ serverUrl, catalog, page, selectedRunId, auto
           if (t === 0) { if (!isBg) setRuns([]); return; }
           const lastPage = Math.max(0, Math.ceil(t / PAGE_SIZE) - 1);
           const safePage = Math.min(page, lastPage);
-          const reversedLimit = Math.min(PAGE_SIZE, t - safePage * PAGE_SIZE);
-          const reversedOffset = Math.max(0, t - safePage * PAGE_SIZE - reversedLimit);
+          let fetchLimit: number, fetchOffset: number;
+          if (sortDesc) {
+            fetchLimit = Math.min(PAGE_SIZE, t - safePage * PAGE_SIZE);
+            fetchOffset = Math.max(0, t - safePage * PAGE_SIZE - fetchLimit);
+          } else {
+            fetchLimit = PAGE_SIZE;
+            fetchOffset = safePage * PAGE_SIZE;
+          }
           const pageQs = new URLSearchParams({
-            'page[limit]':  String(reversedLimit),
-            'page[offset]': String(reversedOffset),
+            'page[limit]':  String(fetchLimit),
+            'page[offset]': String(fetchOffset),
           });
           extra.forEach((v, k) => pageQs.append(k, v));
           const r2 = await fetch(`${serverUrl}/api/v1/search/${catalog}?${pageQs}`);
@@ -330,7 +337,8 @@ export default function RunTable({ serverUrl, catalog, page, selectedRunId, auto
           const j2 = await r2.json();
           if (cancelled) return;
           // eslint-disable-next-line @typescript-eslint/no-explicit-any
-          setRuns([...(j2.data ?? []).map((item: any) => parseRun(item))].reverse());
+          const parsed = (j2.data ?? []).map((item: any) => parseRun(item));
+          setRuns(sortDesc ? [...parsed].reverse() : parsed);
         }
       } catch {
         // ignore
@@ -343,7 +351,49 @@ export default function RunTable({ serverUrl, catalog, page, selectedRunId, auto
     })();
 
     return () => { cancelled = true; };
-  }, [serverUrl, catalog, page, filterKey, refreshKey, keyPrefix]);
+  }, [serverUrl, catalog, page, filterKey, refreshKey, keyPrefix, sortDesc]);
+
+  // Streams: fetched in parallel for visible runs, cached by run ID
+  const [runStreams, setRunStreams] = useState<Record<string, string[]>>({});
+  const lastStreamIdsRef = useRef('');
+
+  // Clear stream cache on server/catalog change
+  useEffect(() => {
+    setRunStreams({});
+    lastStreamIdsRef.current = '';
+  }, [serverUrl, catalog]);
+
+  // Fetch streams for visible runs.
+  // Acquiring runs are always re-fetched (new streams may appear mid-scan).
+  // Non-acquiring runs are cached by run ID.
+  useEffect(() => {
+    if (!serverUrl || catalog === null || runs.length === 0) return;
+
+    const idsKey = runs.map(r => r.id).join(',');
+    const acquiringRuns = runs.filter(r => r.acquiring);
+    const isNewPage = idsKey !== lastStreamIdsRef.current;
+
+    if (!isNewPage && acquiringRuns.length === 0) return;
+    lastStreamIdsRef.current = idsKey;
+
+    const runsToFetch = isNewPage ? runs : acquiringRuns;
+    let cancelled = false;
+    const catPath = catalog ? `/${catalog}` : '';
+    Promise.allSettled(
+      runsToFetch.map(run =>
+        fetch(`${serverUrl}/api/v1/search${catPath}/${run.id}?page[limit]=50`)
+          .then(r => r.json())
+          // eslint-disable-next-line @typescript-eslint/no-explicit-any
+          .then(json => ({ id: run.id, streams: (json.data ?? []).map((item: any) => item.id as string) }))
+      )
+    ).then(results => {
+      if (cancelled) return;
+      const update: Record<string, string[]> = {};
+      results.forEach(r => { if (r.status === 'fulfilled') update[r.value.id] = r.value.streams; });
+      if (Object.keys(update).length > 0) setRunStreams(prev => ({ ...prev, ...update }));
+    });
+    return () => { cancelled = true; };
+  }, [serverUrl, catalog, runs]);
 
   const [showFilters, setShowFilters] = useState(false);
   const lastPage = Math.max(0, Math.ceil(total / PAGE_SIZE) - 1);
@@ -463,7 +513,14 @@ export default function RunTable({ serverUrl, catalog, page, selectedRunId, auto
                 <th className={thClass}>Pos</th>
                 <th className={thClass}>Pts</th>
                 <th className={thClass}>Status</th>
-                <th className={thClass}>Date</th>
+                <th
+                  className={`${thClass} cursor-pointer select-none hover:bg-gray-100`}
+                  onClick={() => setSortDesc(d => !d)}
+                  title="Toggle sort order"
+                >
+                  Date {sortDesc ? '↓' : '↑'}
+                </th>
+                <th className={thClass}>Streams</th>
               </tr>
             </thead>
             <tbody>
@@ -507,11 +564,14 @@ export default function RunTable({ serverUrl, catalog, page, selectedRunId, auto
                     ) : '—'}
                   </td>
                   <td className={tdClass}>{run.date ?? '—'}</td>
+                  <td className={`${tdClass} max-w-[120px]`} title={runStreams[run.id]?.join(', ')}>
+                    {runStreams[run.id] ? runStreams[run.id].join(', ') : <span className="text-gray-300">…</span>}
+                  </td>
                 </tr>
               ))}
               {runs.length === 0 && !loading && (
                 <tr>
-                  <td colSpan={7} className="px-2 py-6 text-center text-xs text-gray-400">
+                  <td colSpan={8} className="px-2 py-6 text-center text-xs text-gray-400">
                     {isFiltering ? 'No runs match the filter' : 'No runs'}
                   </td>
                 </tr>
