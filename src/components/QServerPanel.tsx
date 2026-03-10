@@ -920,51 +920,6 @@ setReRuns(runs ?? null);
             onMouseDown={dragQueue}
           />
 
-          {/* RE status indicator */}
-          <div className="flex-none border-t border-b border-gray-200 bg-white pl-3 pr-4 py-4 flex items-center gap-2">
-            <span className={`w-3 h-3 rounded-full shrink-0 ${
-              !status?.worker_environment_exists ? 'bg-red-500' :
-              abortPending ? 'bg-amber-400 animate-pulse' :
-              resumePending ? 'bg-sky-500 animate-pulse' :
-              status?.re_state === 'paused' ? 'bg-amber-400 animate-pulse' :
-              status?.re_state === 'running' ? 'bg-sky-500 animate-pulse' :
-              'bg-green-500'
-            }`} />
-            <span className="text-sm text-gray-600 font-medium flex-1">
-              {!status?.worker_environment_exists ? 'RE Env not open' : `RE: ${reState}`}
-            </span>
-            {status?.re_state === 'running' && (
-              <button
-                onClick={handlePauseRE}
-                className={`text-xs px-2 py-0.5 rounded font-medium transition-colors ${
-                  pausePending
-                    ? 'bg-amber-400 text-white animate-pulse ring-2 ring-amber-300 ring-offset-1'
-                    : 'bg-amber-100 text-amber-700 hover:bg-amber-200'
-                }`}
-                title={pausePending ? 'Pause requested — waiting for checkpoint…' : 'Pause at next checkpoint'}
-              >{pausePending ? 'Pausing…' : 'Pause'}</button>
-            )}
-            {status?.re_state === 'paused' && !abortPending && (
-              <button
-                onClick={handleResumeRE}
-                className={`text-xs px-2 py-0.5 rounded font-medium transition-colors ${
-                  resumePending
-                    ? 'bg-sky-500 text-white animate-pulse ring-2 ring-sky-300 ring-offset-1'
-                    : 'bg-sky-100 text-sky-700 hover:bg-sky-200'
-                }`}
-                title={resumePending ? 'Resume requested…' : 'Resume paused plan'}
-              >{resumePending ? 'Resuming…' : 'Resume'}</button>
-            )}
-            {(status?.re_state === 'paused' || abortPending) && (
-              <button
-                onClick={handleAbortRE}
-                disabled={abortPending}
-                className={`text-xs px-2 py-0.5 rounded font-medium transition-colors ${abortPending ? 'bg-red-500 text-white animate-pulse ring-2 ring-red-300 ring-offset-1' : 'bg-red-100 text-red-600 hover:bg-red-200'}`}
-                title={abortPending ? 'Aborting…' : 'Abort paused plan'}
-              >{abortPending ? 'Aborting…' : 'Abort'}</button>
-            )}
-          </div>
-
           {/* History */}
           <div className="flex-none px-3 py-4 bg-white border-b border-gray-200 flex items-center gap-2">
             <span className="text-xs font-semibold text-gray-500 uppercase tracking-wide flex-1">
@@ -1005,8 +960,48 @@ setReRuns(runs ?? null);
 
             {/* Running Plan */}
             <div className="flex-none flex flex-col overflow-hidden border-r border-gray-200" style={{ width: runningPlanWidth }}>
-              <div className="flex-none px-4 py-[14px] bg-white border-b border-gray-200">
-                <span className="text-xs font-semibold text-gray-500 uppercase tracking-wide">Running Plan</span>
+              <div className="flex-none px-3 py-4 bg-white border-b border-gray-200 flex items-center gap-2">
+                <span className={`w-3 h-3 rounded-full shrink-0 ${
+                  !status?.worker_environment_exists ? 'bg-red-500' :
+                  abortPending ? 'bg-amber-400 animate-pulse' :
+                  resumePending ? 'bg-sky-500 animate-pulse' :
+                  status?.re_state === 'paused' ? 'bg-amber-400 animate-pulse' :
+                  status?.re_state === 'running' ? 'bg-sky-500 animate-pulse' :
+                  'bg-green-500'
+                }`} />
+                <span className="text-sm text-gray-600 font-medium flex-1">
+                  {!status?.worker_environment_exists ? 'RE Env not open' : `RE: ${reState}`}
+                </span>
+                {status?.re_state === 'running' && (
+                  <button
+                    onClick={handlePauseRE}
+                    className={`text-xs px-2 py-0.5 rounded font-medium transition-colors ${
+                      pausePending
+                        ? 'bg-amber-400 text-white animate-pulse ring-2 ring-amber-300 ring-offset-1'
+                        : 'bg-amber-100 text-amber-700 hover:bg-amber-200'
+                    }`}
+                    title={pausePending ? 'Pause requested — waiting for checkpoint…' : 'Pause at next checkpoint'}
+                  >{pausePending ? 'Pausing…' : 'Pause'}</button>
+                )}
+                {status?.re_state === 'paused' && !abortPending && (
+                  <button
+                    onClick={handleResumeRE}
+                    className={`text-xs px-2 py-0.5 rounded font-medium transition-colors ${
+                      resumePending
+                        ? 'bg-sky-500 text-white animate-pulse ring-2 ring-sky-300 ring-offset-1'
+                        : 'bg-sky-100 text-sky-700 hover:bg-sky-200'
+                    }`}
+                    title={resumePending ? 'Resume requested…' : 'Resume paused plan'}
+                  >{resumePending ? 'Resuming…' : 'Resume'}</button>
+                )}
+                {(status?.re_state === 'paused' || abortPending) && (
+                  <button
+                    onClick={handleAbortRE}
+                    disabled={abortPending}
+                    className={`text-xs px-2 py-0.5 rounded font-medium transition-colors ${abortPending ? 'bg-red-500 text-white animate-pulse ring-2 ring-red-300 ring-offset-1' : 'bg-red-100 text-red-600 hover:bg-red-200'}`}
+                    title={abortPending ? 'Aborting…' : 'Abort paused plan'}
+                  >{abortPending ? 'Aborting…' : 'Abort'}</button>
+                )}
               </div>
               <div className="flex-1 overflow-y-auto p-4 bg-white text-sm">
                 {runningItem ? (
