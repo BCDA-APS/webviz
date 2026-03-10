@@ -35,6 +35,7 @@ const FieldSelector = forwardRef<FieldSelectorHandle, FieldSelectorProps>(functi
   const [xField, setXField] = useState('');
   const [yFields, setYFields] = useState<string[]>([]);
   const [loading, setLoading] = useState(false);
+  const [flashSuccess, setFlashSuccess] = useState(false);
   const lastXRef = useRef('');
   const lastYRef = useRef<string[]>([]);
   // True after we removed traces via onRemoveRunTraces, so the next Y check re-creates the panel
@@ -114,6 +115,16 @@ const FieldSelector = forwardRef<FieldSelectorHandle, FieldSelectorProps>(functi
   }, [serverUrl, catalog, runId, selectedStream]);
 
   useEffect(() => { fetchFields(); }, [fetchFields]);
+
+  const prevLoadingRef = useRef(false);
+  useEffect(() => {
+    if (prevLoadingRef.current && !loading && fields.length > 0) {
+      setFlashSuccess(true);
+      const t = setTimeout(() => setFlashSuccess(false), 1000);
+      return () => clearTimeout(t);
+    }
+    prevLoadingRef.current = loading;
+  }, [loading, fields.length]);
 
   // Prefix-aware classification: device names like "tetramm1" match fields "tetramm1_current1_..."
   const matchesDev = (fieldName: string, devNames: string[]) =>
@@ -340,7 +351,7 @@ const FieldSelector = forwardRef<FieldSelectorHandle, FieldSelectorProps>(functi
   return (
     <div className="flex flex-col h-full overflow-hidden border-t-2 border-gray-200">
       {/* Header */}
-      <div className="shrink-0 px-3 py-2 bg-gray-50 border-b border-gray-200">
+      <div className={`shrink-0 px-3 py-2 border-b border-gray-200 transition-colors duration-1000 ${flashSuccess ? 'bg-green-100' : 'bg-gray-50'}`}>
         <div className="flex items-center gap-2 mb-1.5">
           <span className="text-xs font-semibold text-gray-600">Fields</span>
           <span className="text-xs text-gray-400 truncate" title={runLabel}>{runLabel}</span>

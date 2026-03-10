@@ -595,6 +595,18 @@ export default function App() {
     document.addEventListener('mouseup', onMouseUp);
   }, []);
 
+  // Clamp runsHeight when window is resized to a smaller screen
+  useEffect(() => {
+    const onResize = () => {
+      const headerH = 48;
+      const minFieldsH = 72;
+      const maxH = window.innerHeight - headerH - minFieldsH;
+      setRunsHeight(prev => Math.min(prev, maxH));
+    };
+    window.addEventListener('resize', onResize);
+    return () => window.removeEventListener('resize', onResize);
+  }, []);
+
   return (
     <div className="flex flex-col h-screen w-screen overflow-hidden bg-gray-50">
       {/* Header */}

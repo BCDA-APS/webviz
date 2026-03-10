@@ -43,15 +43,22 @@ type AnalysisPanelProps = {
   onTraceStyleChange: (i: number, patch: Partial<TraceStyle>) => void;
 };
 
-function Section({ id, label, icon, open, onToggle, children }: {
+function Section({ id, label, icon, open, onToggle, children, position }: {
   id: string; label: string; icon: string; open: boolean;
   onToggle: () => void; children: React.ReactNode;
+  position?: 'right' | 'bottom';
 }) {
+  const isBottom = position === 'bottom';
   return (
-    <div className={`border-b border-gray-200 last:border-0 ${open ? 'border-l-2 border-l-sky-400' : 'border-l-2 border-l-transparent'}`}>
+    <div className={[
+      isBottom
+        ? 'flex flex-col min-w-[190px] border-r border-gray-200 last:border-r-0'
+        : 'border-b border-gray-200 last:border-0',
+      open ? 'border-l-2 border-l-sky-400' : 'border-l-2 border-l-transparent',
+    ].join(' ')}>
       <button
         onClick={onToggle}
-        className={`w-full flex items-center gap-2 px-3 py-2 text-left transition-colors ${open ? 'bg-sky-50 hover:bg-sky-100' : 'hover:bg-gray-50'}`}
+        className={`w-full shrink-0 flex items-center gap-2 px-3 py-2 text-left transition-colors ${open ? 'bg-sky-50 hover:bg-sky-100' : 'hover:bg-gray-50'}`}
       >
         <svg className={`w-4 h-4 flex-none ${open ? 'text-sky-500' : 'text-gray-400'}`} fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={1.5}>
           <path strokeLinecap="round" strokeLinejoin="round" d={icon} />
@@ -64,7 +71,7 @@ function Section({ id, label, icon, open, onToggle, children }: {
           <path strokeLinecap="round" strokeLinejoin="round" d="M19 9l-7 7-7-7" />
         </svg>
       </button>
-      {open && <div className="px-3 pb-3 pt-1 bg-sky-50/40">{children}</div>}
+      {open && <div className={`px-3 pb-3 pt-1 bg-sky-50/40 ${isBottom ? 'flex-1 overflow-y-auto' : ''}`}>{children}</div>}
     </div>
   );
 }
@@ -213,7 +220,7 @@ export default function AnalysisPanel({
     });
 
   return (
-    <div className="flex flex-col h-full overflow-y-auto">
+    <div className={`flex flex-col h-full ${position === 'bottom' ? 'overflow-hidden' : 'overflow-y-auto'}`}>
       {/* Header */}
       <div className="flex-none px-3 py-2 border-b border-gray-200 flex items-center gap-2">
         <span className="text-xs font-semibold text-gray-500 uppercase tracking-wider flex-1">Analysis</span>
@@ -240,9 +247,9 @@ export default function AnalysisPanel({
       )}
 
       {/* Sections */}
-      <div className={`flex-1 ${position === 'bottom' ? 'flex flex-row overflow-x-auto' : 'flex flex-col'}`}>
+      <div className={`flex-1 min-h-0 ${position === 'bottom' ? 'flex flex-row overflow-x-auto' : 'flex flex-col overflow-y-auto'}`}>
 
-        <Section id="style" label="Style" icon="M4 20h16M8 16l4-12 4 12M6 10h12"
+        <Section id="style" label="Style" icon="M4 20h16M8 16l4-12 4 12M6 10h12" position={position}
           open={open.has('style')} onToggle={() => toggle('style')}>
           {(() => {
             const style: TraceStyle = { ...DEFAULT_TRACE_STYLE, ...(traceStyles[activeTraceIndex] ?? {}) };
@@ -324,7 +331,7 @@ export default function AnalysisPanel({
           })()}
         </Section>
 
-        <Section id="statistics" label="Statistics" icon="M3 3v18h18M7 16l4-6 4 4 4-8"
+        <Section id="statistics" label="Statistics" icon="M3 3v18h18M7 16l4-6 4 4 4-8" position={position}
           open={open.has('statistics')} onToggle={() => toggle('statistics')}>
           {stats ? (
             <table className="w-full text-xs">
@@ -350,7 +357,7 @@ export default function AnalysisPanel({
           )}
         </Section>
 
-        <Section id="derivative" label="Derivative" icon="M3 12h2l3-8 4 16 3-10 2 2h4"
+        <Section id="derivative" label="Derivative" icon="M3 12h2l3-8 4 16 3-10 2 2h4" position={position}
           open={open.has('derivative')} onToggle={() => toggle('derivative')}>
           <div className="flex flex-col gap-2">
             <label className="flex items-center gap-2 cursor-pointer select-none">
@@ -382,52 +389,59 @@ export default function AnalysisPanel({
           </div>
         </Section>
 
-        <Section id="fits" label="Fits" icon="M3 17c3-6 5-10 9-10s6 4 9 10"
+        <Section id="fits" label="Fits" icon="M3 17c3-6 5-10 9-10s6 4 9 10" position={position}
           open={open.has('fits')} onToggle={() => toggle('fits')}>
-          <div className="flex flex-col gap-2">
-            {/* Model selector */}
-            <select
-              value={fitModel}
-              onChange={e => { onFitModelChange(e.target.value); onClearFit(); }}
-              className="text-sm border border-gray-200 rounded px-2 py-1 bg-white focus:outline-none focus:border-sky-400"
-            >
-              {MODEL_NAMES.map(m => <option key={m} value={m}>{m}</option>)}
-            </select>
-
-            {/* Actions */}
-            <div className="flex gap-1.5">
-              <button
-                onClick={onFit}
-                disabled={!hasXYPanel}
-                className="flex-1 text-xs bg-sky-600 hover:bg-sky-500 active:bg-sky-700 disabled:bg-gray-200 disabled:text-gray-400 text-white rounded px-2 py-1 font-medium transition-colors"
+          <div className={`${position === 'bottom' ? 'flex flex-row gap-3 items-start' : 'flex flex-col gap-2'}`}>
+            {/* Controls */}
+            <div className="flex flex-col gap-2 shrink-0">
+              {/* Model selector */}
+              <select
+                value={fitModel}
+                onChange={e => { onFitModelChange(e.target.value); onClearFit(); }}
+                className="text-sm border border-gray-200 rounded px-2 py-1 bg-white focus:outline-none focus:border-sky-400"
               >
-                Fit
-              </button>
-              {fitResults && (
+                {MODEL_NAMES.map(m => <option key={m} value={m}>{m}</option>)}
+              </select>
+
+              {/* Actions */}
+              <div className="flex gap-1.5">
                 <button
-                  onClick={onClearFit}
-                  className="text-xs border border-gray-200 hover:bg-gray-50 text-gray-500 rounded px-2 py-1 transition-colors"
+                  onClick={onFit}
+                  disabled={!hasXYPanel}
+                  className="flex-1 text-xs bg-sky-600 hover:bg-sky-500 active:bg-sky-700 disabled:bg-gray-200 disabled:text-gray-400 text-white rounded px-2 py-1 font-medium transition-colors"
                 >
-                  Clear
+                  Fit
                 </button>
+                {fitResults && (
+                  <button
+                    onClick={onClearFit}
+                    className="text-xs border border-gray-200 hover:bg-gray-50 text-gray-500 rounded px-2 py-1 transition-colors"
+                  >
+                    Clear
+                  </button>
+                )}
+              </div>
+
+              {/* Fit between cursors */}
+              <label className={`flex items-center gap-2 select-none ${cursor1 != null && cursor2 != null ? 'cursor-pointer' : 'cursor-not-allowed opacity-40'}`}>
+                <input
+                  type="checkbox"
+                  checked={fitBetweenCursors}
+                  onChange={e => onFitBetweenCursorsChange(e.target.checked)}
+                  disabled={cursor1 == null || cursor2 == null}
+                  className="accent-sky-600 w-3.5 h-3.5 disabled:opacity-40"
+                />
+                <span className="text-xs text-gray-600">Fit between cursors</span>
+              </label>
+
+              {!hasXYPanel && (
+                <p className="text-xs text-gray-400 italic">Open a plot to enable fitting.</p>
               )}
             </div>
 
-            {/* Fit between cursors */}
-            <label className={`flex items-center gap-2 select-none ${cursor1 != null && cursor2 != null ? 'cursor-pointer' : 'cursor-not-allowed opacity-40'}`}>
-              <input
-                type="checkbox"
-                checked={fitBetweenCursors}
-                onChange={e => onFitBetweenCursorsChange(e.target.checked)}
-                disabled={cursor1 == null || cursor2 == null}
-                className="accent-sky-600 w-3.5 h-3.5 disabled:opacity-40"
-              />
-              <span className="text-xs text-gray-600">Fit between cursors</span>
-            </label>
-
             {/* Results */}
             {fitResults && (
-              <div className="mt-1 border border-gray-100 rounded overflow-hidden">
+              <div className={`border border-gray-100 rounded overflow-hidden ${position !== 'bottom' ? 'mt-1' : ''}`}>
                 <div className="bg-gray-50 px-2 py-1 flex items-center justify-between border-b border-gray-100">
                   <span className="text-xs font-medium text-gray-600">{fitResults.model}</span>
                   <span className={`text-xs font-semibold ${fitResults.rSquared > 0.99 ? 'text-green-600' : fitResults.rSquared > 0.95 ? 'text-amber-600' : 'text-red-500'}`}>
@@ -447,13 +461,10 @@ export default function AnalysisPanel({
               </div>
             )}
 
-            {!hasXYPanel && (
-              <p className="text-xs text-gray-400 italic">Open a plot to enable fitting.</p>
-            )}
           </div>
         </Section>
 
-        <Section id="cursors" label="Cursors" icon="M12 3v18M3 12h18"
+        <Section id="cursors" label="Cursors" icon="M12 3v18M3 12h18" position={position}
           open={open.has('cursors')} onToggle={() => toggle('cursors')}>
           <div className="flex flex-col gap-2">
             <p className="text-xs text-gray-400 leading-relaxed">
@@ -511,7 +522,7 @@ export default function AnalysisPanel({
           </div>
         </Section>
 
-        <Section id="logscale" label="Log Scale" icon="M4 20V4m4 16V10m4 10V14m4 10V8"
+        <Section id="logscale" label="Log Scale" icon="M4 20V4m4 16V10m4 10V14m4 10V8" position={position}
           open={open.has('logscale')} onToggle={() => toggle('logscale')}>
           <div className="flex flex-col gap-2">
             <label className="flex items-center gap-2 cursor-pointer select-none">
