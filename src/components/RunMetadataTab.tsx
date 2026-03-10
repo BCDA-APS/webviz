@@ -4,6 +4,7 @@ type Props = {
   serverUrl: string;
   catalog: string | null;
   runId: string;
+  runAcquiring?: boolean;
 };
 
 const catSeg = (c: string | null) => c ? `/${c}` : '';
@@ -105,7 +106,7 @@ function Section({ title, value }: { title: string; value: unknown }) {
   );
 }
 
-export default function RunMetadataTab({ serverUrl, catalog, runId }: Props) {
+export default function RunMetadataTab({ serverUrl, catalog, runId, runAcquiring }: Props) {
   const [meta, setMeta] = useState<Record<string, unknown> | null>(null);
   const [loading, setLoading] = useState(false);
 
@@ -113,13 +114,16 @@ export default function RunMetadataTab({ serverUrl, catalog, runId }: Props) {
     if (!serverUrl || catalog === null || !runId) { setMeta(null); return; }
     setLoading(true);
     setMeta(null);
-    fetch(`${serverUrl}/api/v1/metadata${catSeg(catalog)}/${runId}`)
-      .then(r => r.json())
-      // eslint-disable-next-line @typescript-eslint/no-explicit-any
-      .then((j: any) => setMeta(j.data?.attributes?.metadata ?? j.data?.attributes ?? j))
-      .catch(() => setMeta(null))
-      .finally(() => setLoading(false));
-  }, [serverUrl, catalog, runId]);
+    const fetchMeta = () =>
+      fetch(`${serverUrl}/api/v1/metadata${catSeg(catalog)}/${runId}`)
+        .then(r => r.json())
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
+        .then((j: any) => setMeta(j.data?.attributes?.metadata ?? j.data?.attributes ?? j))
+        .catch(() => {});
+    fetchMeta().finally(() => setLoading(false));
+    const id = runAcquiring ? setInterval(fetchMeta, 5000) : undefined;
+    return () => { if (id) clearInterval(id); };
+  }, [serverUrl, catalog, runId, runAcquiring]);
 
   if (!runId) {
     return (

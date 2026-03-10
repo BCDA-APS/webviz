@@ -4,6 +4,7 @@ type Props = {
   serverUrl: string;
   catalog: string | null;
   runId: string;
+  runAcquiring?: boolean;
 };
 
 const catSeg = (c: string | null) => c ? `/${c}` : '';
@@ -147,7 +148,7 @@ async function probeStreamFields(serverUrl: string, catalog: string | null, runI
   return [];
 }
 
-export default function RunSummaryTab({ serverUrl, catalog, runId }: Props) {
+export default function RunSummaryTab({ serverUrl, catalog, runId, runAcquiring }: Props) {
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   const [meta, setMeta] = useState<Record<string, any> | null>(null);
   const [streams, setStreams] = useState<StreamDesc[]>([]);
@@ -158,8 +159,10 @@ export default function RunSummaryTab({ serverUrl, catalog, runId }: Props) {
     setLoading(true);
     setMeta(null);
     setStreams([]);
+    let cancelled = false;
 
-    (async () => {
+    const fetchAll = async () => {
+      if (cancelled) return;
       try {
         // Fetch run metadata (includes start, stop, descriptors)
         const metaR = await fetch(`${serverUrl}/api/v1/metadata${catSeg(catalog)}/${runId}`);
@@ -207,12 +210,16 @@ export default function RunSummaryTab({ serverUrl, catalog, runId }: Props) {
 
           return { name: streamName, fields };
         }));
-        setStreams(descs);
+        if (!cancelled) setStreams(descs);
       } finally {
-        setLoading(false);
+        if (!cancelled) setLoading(false);
       }
-    })();
-  }, [serverUrl, catalog, runId]);
+    };
+
+    fetchAll();
+    const id = runAcquiring ? setInterval(fetchAll, 5000) : undefined;
+    return () => { cancelled = true; if (id) clearInterval(id); };
+  }, [serverUrl, catalog, runId, runAcquiring]);
 
   if (!runId) {
     return (

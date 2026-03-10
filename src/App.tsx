@@ -797,12 +797,12 @@ export default function App() {
                 )}
                 {centerTab === 'metadata' && (
                   <div className="bg-white rounded-lg border border-gray-200 h-full overflow-hidden">
-                    <RunMetadataTab serverUrl={serverUrl} catalog={selectedCatalog} runId={selectedRunId} />
+                    <RunMetadataTab serverUrl={serverUrl} catalog={selectedCatalog} runId={selectedRunId} runAcquiring={selectedRunAcquiring} />
                   </div>
                 )}
                 {centerTab === 'summary' && (
                   <div className="bg-gray-50 rounded-lg border border-gray-200 h-full overflow-hidden">
-                    <RunSummaryTab serverUrl={serverUrl} catalog={selectedCatalog} runId={selectedRunId} />
+                    <RunSummaryTab serverUrl={serverUrl} catalog={selectedCatalog} runId={selectedRunId} runAcquiring={selectedRunAcquiring} />
                   </div>
                 )}
               </div>
@@ -898,12 +898,12 @@ export default function App() {
                 )}
                 {centerTab === 'metadata' && (
                   <div className="bg-white rounded-lg border border-gray-200 h-full overflow-hidden">
-                    <RunMetadataTab serverUrl={serverUrl} catalog={selectedCatalog} runId={selectedRunId} />
+                    <RunMetadataTab serverUrl={serverUrl} catalog={selectedCatalog} runId={selectedRunId} runAcquiring={selectedRunAcquiring} />
                   </div>
                 )}
                 {centerTab === 'summary' && (
                   <div className="bg-gray-50 rounded-lg border border-gray-200 h-full overflow-hidden">
-                    <RunSummaryTab serverUrl={serverUrl} catalog={selectedCatalog} runId={selectedRunId} />
+                    <RunSummaryTab serverUrl={serverUrl} catalog={selectedCatalog} runId={selectedRunId} runAcquiring={selectedRunAcquiring} />
                   </div>
                 )}
               </div>
