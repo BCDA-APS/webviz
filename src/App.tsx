@@ -302,18 +302,20 @@ export default function App() {
 
   const toProxyUrl = toProxyUrlStatic;
 
-  const handleConnect = () => {
+  const handleConnect = (url = inputUrl) => {
+    setInputUrl(url);
     setSelectedCatalog(null);
     setSelectedRunId('');
     setSelectedRunLabel('');
     setTiledStatus('idle');
     setShowServerDropdown(false);
-    connectingUrlRef.current = inputUrl;
-    setServerUrl(toProxyUrl(inputUrl));
+    connectingUrlRef.current = url;
+    setServerUrl(toProxyUrl(url));
   };
 
-  const handleQsConnect = () => {
-    const url = qsInputUrl.replace(/\/$/, '');
+  const handleQsConnect = (rawUrl = qsInputUrl) => {
+    const url = rawUrl.replace(/\/$/, '');
+    setQsInputUrl(url);
     localStorage.setItem('qsApiKey', qsInputApiKey);
     setQsProxyUrl(toQsProxyUrl(url));
     setQsStatus(null);
@@ -660,7 +662,7 @@ export default function App() {
                   {recentServers.map(url => (
                     <button
                       key={url}
-                      onClick={() => { setInputUrl(url); setShowServerDropdown(false); }}
+                      onClick={() => handleConnect(url)}
                       className="w-full text-left px-3 py-1.5 text-sm text-white hover:bg-sky-800 font-mono block whitespace-nowrap"
                     >
                       {url}
@@ -781,7 +783,7 @@ export default function App() {
                   {recentQsServers.map(url => (
                     <button
                       key={url}
-                      onClick={() => { setQsInputUrl(url); setShowQsDropdown(false); }}
+                      onClick={() => handleQsConnect(url)}
                       className="w-full text-left px-3 py-1.5 text-sm text-white hover:bg-sky-800 font-mono block whitespace-nowrap"
                     >
                       {url}
