@@ -5,7 +5,7 @@ type Props = {
   serverUrl: string;
   catalog: string | null;
   runId: string;
-  shape: [number, number]; // [nRows (slow), nCols (fast)]
+  shape: [number, number] | null; // kept for API compatibility; shape is now derived from motor data
   dimensions: string[][]; // [[slowMotorName, ...], [fastMotorName, ...]]
 };
 
@@ -25,10 +25,6 @@ function viridisColor(t: number): [number, number, number] {
   const hi = Math.min(VIRIDIS.length - 1, Math.ceil(idx));
   const frac = idx - lo;
   return [0, 1, 2].map(i => Math.round(VIRIDIS[lo][i] + frac * (VIRIDIS[hi][i] - VIRIDIS[lo][i]))) as [number, number, number];
-}
-
-function reshape(arr: number[], nRows: number, nCols: number): number[][] {
-  return Array.from({ length: nRows }, (_, i) => arr.slice(i * nCols, (i + 1) * nCols));
 }
 
 async function fetchAllColumns(serverUrl: string, cs: string, runId: string): Promise<Record<string, number[]> | null> {
@@ -98,7 +94,7 @@ function drawHeatmap(
 
   // Compute z range
   let zMin = Infinity, zMax = -Infinity;
-  for (const row of zMatrix) for (const v of row) { if (v < zMin) zMin = v; if (v > zMax) zMax = v; }
+  for (const row of zMatrix) for (const v of row) { if (isFinite(v) && v < zMin) zMin = v; if (isFinite(v) && v > zMax) zMax = v; }
   const zRange = zMax - zMin || 1;
 
   const cellW = w / nCols;
@@ -109,7 +105,8 @@ function drawHeatmap(
 
   for (let row = 0; row < nRows; row++) {
     for (let col = 0; col < nCols; col++) {
-      const t = (zMatrix[row][col] - zMin) / zRange;
+      const v = zMatrix[row][col];
+      const t = isFinite(v) ? (v - zMin) / zRange : 0;
       const [r, g, b] = viridisColor(t);
       const x0 = Math.floor(col * cellW);
       const x1 = Math.floor((col + 1) * cellW);
@@ -129,17 +126,14 @@ function drawHeatmap(
   if (crossRow !== null && crossCol !== null) {
     ctx.strokeStyle = 'rgba(255,255,255,0.85)';
     ctx.lineWidth = 1.5;
-    // Horizontal line
     const cy = (crossRow + 0.5) * cellH;
     ctx.beginPath(); ctx.moveTo(0, cy); ctx.lineTo(w, cy); ctx.stroke();
-    // Vertical line
     const cx = (crossCol + 0.5) * cellW;
     ctx.beginPath(); ctx.moveTo(cx, 0); ctx.lineTo(cx, h); ctx.stroke();
   }
 }
 
-export default function GridScanPanel({ serverUrl, catalog, runId, shape, dimensions }: Props) {
-  const [nRows, nCols] = shape;
+export default function GridScanPanel({ serverUrl, catalog, runId, dimensions }: Props) {
   const slowMotor = dimensions[0]?.[0] ?? '';
   const fastMotor = dimensions[1]?.[0] ?? '';
 
@@ -177,22 +171,49 @@ export default function GridScanPanel({ serverUrl, catalog, runId, shape, dimens
     if (candidate) setZField(candidate);
   }, [allData, zField, slowMotor, fastMotor]);
 
-  // Derived: z matrix and axis value arrays
-  const zMatrix = useMemo(() => {
-    if (!allData || !zField || !allData[zField]) return null;
-    return reshape(allData[zField], nRows, nCols);
-  }, [allData, zField, nRows, nCols]);
+  // Build the grid by placing each data point into its (slowMotor, fastMotor) cell.
+  // This is robust to out-of-order data (Tiled can return rows in non-scan order).
+  const { zMatrix, slowAxis, fastAxis } = useMemo<{
+    zMatrix: number[][] | null;
+    slowAxis: number[];
+    fastAxis: number[];
+  }>(() => {
+    if (!allData || !zField || !allData[zField] || !slowMotor || !fastMotor ||
+        !allData[slowMotor] || !allData[fastMotor]) {
+      return { zMatrix: null, slowAxis: [], fastAxis: [] };
+    }
+    const zFlat = allData[zField];
+    const m1Flat = allData[slowMotor];
+    const m2Flat = allData[fastMotor];
+    const n = zFlat.length;
 
-  const slowAxis = useMemo(() => {
-    if (!allData || !slowMotor || !allData[slowMotor]) return [];
-    const vals = allData[slowMotor];
-    return Array.from({ length: nRows }, (_, i) => vals[i * nCols]);
-  }, [allData, slowMotor, nRows, nCols]);
+    // Round to 6 decimal places to merge floating-point-identical motor positions
+    const PREC = 1e6;
+    const round = (v: number) => Math.round(v * PREC);
 
-  const fastAxis = useMemo(() => {
-    if (!allData || !fastMotor || !allData[fastMotor]) return [];
-    return allData[fastMotor].slice(0, nCols);
-  }, [allData, fastMotor, nCols]);
+    const m1Unique = [...new Set(m1Flat.map(round))].sort((a, b) => a - b);
+    const m2Unique = [...new Set(m2Flat.map(round))].sort((a, b) => a - b);
+    const m1Idx = new Map(m1Unique.map((v, i) => [v, i]));
+    const m2Idx = new Map(m2Unique.map((v, i) => [v, i]));
+    const nR = m1Unique.length;
+    const nC = m2Unique.length;
+
+    const rows: number[][] = Array.from({ length: nR }, () => new Array(nC).fill(NaN));
+    for (let k = 0; k < n; k++) {
+      const ri = m1Idx.get(round(m1Flat[k]));
+      const ci = m2Idx.get(round(m2Flat[k]));
+      if (ri !== undefined && ci !== undefined) rows[ri][ci] = zFlat[k];
+    }
+
+    return {
+      zMatrix: rows,
+      slowAxis: m1Unique.map(v => v / PREC),
+      fastAxis: m2Unique.map(v => v / PREC),
+    };
+  }, [allData, zField, slowMotor, fastMotor]);
+
+  const nRows = zMatrix?.length ?? 0;
+  const nCols = zMatrix?.[0]?.length ?? 0;
 
   // Draw heatmap on canvas whenever data or crosshair changes
   useEffect(() => {
@@ -320,10 +341,10 @@ export default function GridScanPanel({ serverUrl, catalog, runId, shape, dimens
         <div className="bg-gray-50 rounded border border-gray-200 flex items-center justify-center">
           <div className="text-xs text-gray-400 text-center px-3">
             <p className="font-medium text-gray-500">{runId.slice(0, 8)}…</p>
-            <p className="mt-1">{shape[0]} rows × {shape[1]} cols</p>
+            <p className="mt-1">{nRows} rows × {nCols} cols</p>
             {zMatrix && (
               <p className="mt-1 font-mono">
-                z: [{Math.min(...zMatrix.flat()).toPrecision(4)}, {Math.max(...zMatrix.flat()).toPrecision(4)}]
+                z: [{Math.min(...zMatrix.flat().filter(isFinite)).toPrecision(4)}, {Math.max(...zMatrix.flat().filter(isFinite)).toPrecision(4)}]
               </p>
             )}
           </div>

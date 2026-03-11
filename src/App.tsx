@@ -172,6 +172,8 @@ export default function App() {
   const [selectedRunAcquiring, setSelectedRunAcquiring] = useState(false);
   const [selectedRunShape, setSelectedRunShape] = useState<number[] | null>(null);
   const [selectedRunHintsDimensions, setSelectedRunHintsDimensions] = useState<string[][] | null>(null);
+  const [showGridHeatmap, setShowGridHeatmap] = useState(false);
+  const pendingGridHeatmapRef = useRef(false);
   const [runPage, setRunPage] = useState(0);
   const [autoFollow, setAutoFollow] = useState(false);
   const [sidebarCollapsed, setSidebarCollapsed] = useState(false);
@@ -198,7 +200,7 @@ export default function App() {
   const [showSettings, setShowSettings] = useState(false);
   const settingsRef = useRef<HTMLDivElement>(null);
   const qserverEnabled = settings.qserverEnabled !== false;
-  const isGridScan = selectedRunShape !== null && selectedRunShape.length === 2 && selectedRunHintsDimensions !== null;
+  const isGridScan = selectedRunHintsDimensions !== null && selectedRunHintsDimensions.length === 2;
   const updateSetting = <K extends keyof typeof settings>(key: K, val: (typeof settings)[K]) => {
     const next = { ...settings, [key]: val };
     setSettings(next);
@@ -238,10 +240,13 @@ export default function App() {
     }
   }, [qserverEnabled]); // eslint-disable-line react-hooks/exhaustive-deps
 
-  // Fetch grid scan metadata (shape + hints) when a run is selected
+  // Fetch grid scan metadata (shape + hints) when a run is selected.
+  // If a double-click is pending, decide here whether to show the heatmap
+  // or fall back to a 1D plot once we know if the run is a grid scan.
   useEffect(() => {
     setSelectedRunShape(null);
     setSelectedRunHintsDimensions(null);
+    setShowGridHeatmap(false);
     if (!selectedRunId || !serverUrl) return;
     const cs = catSeg(selectedCatalog);
     fetch(`${serverUrl}/api/v1/metadata${cs}/${selectedRunId}`)
@@ -249,16 +254,35 @@ export default function App() {
       // eslint-disable-next-line @typescript-eslint/no-explicit-any
       .then((j: any) => {
         const start = j?.data?.attributes?.metadata?.start;
-        if (!start) return;
-        const shape: number[] | undefined = start.shape;
-        const dims = start.hints?.dimensions;
-        if (Array.isArray(shape) && shape.length === 2) setSelectedRunShape(shape);
-        // dims format: [[motorList, streamName], ...] — extract just the motor name lists
-        if (Array.isArray(dims) && dims.length === 2)
+        const shape: number[] | undefined = start?.shape;
+        const dims = start?.hints?.dimensions;
+        // Detect grid scan from hints.dimensions only — start.shape may be flat (total points)
+        // even for 2D grid scans on some Bluesky/Tiled versions.
+        const isGrid = Array.isArray(dims) && dims.length === 2;
+        if (isGrid) {
+          // Use start.shape if it's already 2D; otherwise GridScanPanel will derive it from data.
+          if (Array.isArray(shape) && shape.length === 2) setSelectedRunShape(shape);
           // eslint-disable-next-line @typescript-eslint/no-explicit-any
-          setSelectedRunHintsDimensions(dims.map((d: any) => d[0]));
+          setSelectedRunHintsDimensions((dims as any[]).map((d: any) => d[0]));
+          // Clear any stale 1D panel — we don't want the old plot visible for a grid scan.
+          setPanel(null);
+          setFitResults(null);
+        }
+        if (pendingGridHeatmapRef.current) {
+          pendingGridHeatmapRef.current = false;
+          if (isGrid) {
+            setShowGridHeatmap(true);
+          } else {
+            fieldSelectorRef.current?.schedulePlot();
+          }
+        }
       })
-      .catch(() => {});
+      .catch(() => {
+        if (pendingGridHeatmapRef.current) {
+          pendingGridHeatmapRef.current = false;
+          fieldSelectorRef.current?.schedulePlot();
+        }
+      });
   }, [selectedRunId, serverUrl, selectedCatalog]);
 
   // Close settings dropdown on outside click
@@ -460,7 +484,15 @@ export default function App() {
       .catch(() => setTiledStatus('error'));
   }, [serverUrl]);
 
+  const isGridScanRef = useRef(isGridScan);
+  useEffect(() => { isGridScanRef.current = isGridScan; }, [isGridScan]);
+
   const plot = useCallback((traces: XYTrace[], title: string) => {
+    if (isGridScanRef.current) {
+      // For grid scans "Plot" shows the heatmap, not a 1D trace
+      setShowGridHeatmap(true);
+      return;
+    }
     setPanel({ id: crypto.randomUUID(), type: 'xy' as const, traces, title });
     setFitResults(null);
     setShowDerivative(false);
@@ -977,6 +1009,10 @@ export default function App() {
                       fieldSelectorRef.current?.scheduleLive();
                       return;
                     }
+                    // Only cancel a pending grid heatmap if the user explicitly
+                    // single-clicked a *different* run — not during the first
+                    // click of a double-click sequence on the same run.
+                    if (id !== selectedRunId) pendingGridHeatmapRef.current = false;
                     setSelectedRunId(id);
                     setSelectedRunLabel(label);
                     setSelectedRunDetectors(dets);
@@ -984,12 +1020,22 @@ export default function App() {
                     setSelectedRunAcquiring(acquiring);
                   }}
                   onDoubleClickRun={(id, label, dets, motors, acquiring) => {
+                    const isSameRun = id === selectedRunId;
                     setSelectedRunId(id);
                     setSelectedRunLabel(label);
                     setSelectedRunDetectors(dets);
                     setSelectedRunMotors(motors);
                     setSelectedRunAcquiring(acquiring);
-                    if (!acquiring) fieldSelectorRef.current?.schedulePlot();
+                    if (!acquiring) {
+                      if (isSameRun) {
+                        // useEffect won't fire (no id change) — decide immediately
+                        if (isGridScan) setShowGridHeatmap(true);
+                        else fieldSelectorRef.current?.schedulePlot();
+                      } else {
+                        // New run: metadata effect will decide after fetching
+                        pendingGridHeatmapRef.current = true;
+                      }
+                    }
                   }}
                   onShiftClickRun={handleShiftClickRun}
                   loadingRunId={addRunId}
@@ -1081,10 +1127,10 @@ export default function App() {
               {/* Tab content */}
               <div className="flex-1 overflow-hidden p-4">
                 {centerTab === 'graph' && (
-                  panel ? (
-                    <VisualizationPanel panel={panel} onRemove={() => { setPanel(null); setFitResults(null); }} onRemoveTrace={handleRemoveTrace} onStopLive={stopLive} onLiveTracesUpdate={handleLiveTracesUpdate} extraTraces={derivativeTraces} onRemoveExtraTrace={() => setShowDerivative(false)} xLog={xLog} yLog={yLog} fitResults={fitResults} traceStyles={traceStyles} cursor1={cursor1} cursor2={cursor2} cursor1Y={cursor1Y} cursor2Y={cursor2Y} onPlotClick={handlePlotClick} />
-                  ) : isGridScan ? (
-                    <GridScanPanel serverUrl={serverUrl} catalog={selectedCatalog} runId={selectedRunId} shape={selectedRunShape as [number, number]} dimensions={selectedRunHintsDimensions!} />
+                  showGridHeatmap && isGridScan ? (
+                    <GridScanPanel serverUrl={serverUrl} catalog={selectedCatalog} runId={selectedRunId} shape={selectedRunShape as [number, number] | null} dimensions={selectedRunHintsDimensions!} />
+                  ) : panel ? (
+                    <VisualizationPanel panel={panel} onRemove={() => { setPanel(null); setFitResults(null); if (isGridScan) setShowGridHeatmap(true); }} onRemoveTrace={handleRemoveTrace} onStopLive={stopLive} onLiveTracesUpdate={handleLiveTracesUpdate} extraTraces={derivativeTraces} onRemoveExtraTrace={() => setShowDerivative(false)} xLog={xLog} yLog={yLog} fitResults={fitResults} traceStyles={traceStyles} cursor1={cursor1} cursor2={cursor2} cursor1Y={cursor1Y} cursor2Y={cursor2Y} onPlotClick={handlePlotClick} />
                   ) : (
                     <div className="h-full flex flex-col items-center justify-center text-gray-400 select-none">
                       <svg className="h-16 w-16 mb-4 opacity-30" fill="none" viewBox="0 0 24 24" stroke="currentColor">
@@ -1184,10 +1230,10 @@ export default function App() {
               {/* Tab content */}
               <div className="flex-1 overflow-hidden p-4">
                 {centerTab === 'graph' && (
-                  panel ? (
-                    <VisualizationPanel panel={panel} onRemove={() => { setPanel(null); setFitResults(null); }} onRemoveTrace={handleRemoveTrace} onStopLive={stopLive} onLiveTracesUpdate={handleLiveTracesUpdate} extraTraces={derivativeTraces} onRemoveExtraTrace={() => setShowDerivative(false)} xLog={xLog} yLog={yLog} fitResults={fitResults} traceStyles={traceStyles} cursor1={cursor1} cursor2={cursor2} cursor1Y={cursor1Y} cursor2Y={cursor2Y} onPlotClick={handlePlotClick} />
-                  ) : isGridScan ? (
-                    <GridScanPanel serverUrl={serverUrl} catalog={selectedCatalog} runId={selectedRunId} shape={selectedRunShape as [number, number]} dimensions={selectedRunHintsDimensions!} />
+                  showGridHeatmap && isGridScan ? (
+                    <GridScanPanel serverUrl={serverUrl} catalog={selectedCatalog} runId={selectedRunId} shape={selectedRunShape as [number, number] | null} dimensions={selectedRunHintsDimensions!} />
+                  ) : panel ? (
+                    <VisualizationPanel panel={panel} onRemove={() => { setPanel(null); setFitResults(null); if (isGridScan) setShowGridHeatmap(true); }} onRemoveTrace={handleRemoveTrace} onStopLive={stopLive} onLiveTracesUpdate={handleLiveTracesUpdate} extraTraces={derivativeTraces} onRemoveExtraTrace={() => setShowDerivative(false)} xLog={xLog} yLog={yLog} fitResults={fitResults} traceStyles={traceStyles} cursor1={cursor1} cursor2={cursor2} cursor1Y={cursor1Y} cursor2Y={cursor2Y} onPlotClick={handlePlotClick} />
                   ) : (
                     <div className="h-full flex flex-col items-center justify-center text-gray-400 select-none">
                       <svg className="h-16 w-16 mb-4 opacity-30" fill="none" viewBox="0 0 24 24" stroke="currentColor">
