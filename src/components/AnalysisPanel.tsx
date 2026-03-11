@@ -43,7 +43,7 @@ type AnalysisPanelProps = {
   onTraceStyleChange: (i: number, patch: Partial<TraceStyle>) => void;
 };
 
-function Section({ id, label, icon, open, onToggle, children, position }: {
+function Section({ id: _id, label, icon, open, onToggle, children, position }: {
   id: string; label: string; icon: string; open: boolean;
   onToggle: () => void; children: React.ReactNode;
   position?: 'right' | 'bottom';

@@ -57,7 +57,6 @@ function lmFit(
   xs: number[], ys: number[], p0: number[],
   maxIter = 500,
 ): number[] {
-  const n = xs.length;
   const m = p0.length;
   const eps = 1e-7;
   let p = [...p0];
@@ -71,7 +70,7 @@ function lmFit(
 
   for (let iter = 0; iter < maxIter; iter++) {
     // Jacobian via central differences
-    const J: number[][] = xs.map((x, i) =>
+    const J: number[][] = xs.map((x) =>
       Array.from({ length: m }, (_, j) => {
         const ph = [...p]; ph[j] += eps;
         const pl = [...p]; pl[j] -= eps;

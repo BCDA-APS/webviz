@@ -60,11 +60,12 @@ function statusColor(status?: string) {
 
 function planColor(name: string | undefined) {
   const colors = [
-    'bg-sky-100 border-sky-300 text-sky-800',
-    'bg-violet-100 border-violet-300 text-violet-800',
-    'bg-emerald-100 border-emerald-300 text-emerald-800',
-    'bg-amber-100 border-amber-300 text-amber-800',
-    'bg-rose-100 border-rose-300 text-rose-800',
+    'border-l-sky-400',
+    'border-l-violet-400',
+    'border-l-emerald-400',
+    'border-l-teal-400',
+    'border-l-indigo-400',
+    'border-l-fuchsia-400',
   ];
   if (!name) return colors[0];
   let h = 0; for (const c of name) h = (h * 31 + c.charCodeAt(0)) & 0xffff;
@@ -216,7 +217,7 @@ function QueueCard({ item, summary, running, selected, onSelect, onDelete, onEdi
   const cls = planColor(item.name);
   const dragFromHandle = useRef(false);
   const cardCls = [
-    'relative border rounded p-2 text-xs select-none',
+    'relative border border-l-4 rounded p-2 text-xs select-none bg-indigo-50',
     cls,
     running ? 'ring-2 ring-sky-500' : '',
     !running && selected ? 'ring-2 ring-sky-400 ring-offset-1' : '',
@@ -240,7 +241,7 @@ function QueueCard({ item, summary, running, selected, onSelect, onDelete, onEdi
         <div className="flex items-center gap-2">
           <div className="flex-1 min-w-0">
             <p className="font-semibold truncate">{item.name}</p>
-            {summary && <p className="text-gray-500 mt-0.5 truncate">{summary}</p>}
+            {summary && <p className="text-gray-500 mt-0.5 truncate" title={summary}>{summary}</p>}
           </div>
           <span className="shrink-0 animate-pulse text-sky-600 font-bold text-xl leading-none">▶</span>
         </div>
@@ -266,7 +267,7 @@ function QueueCard({ item, summary, running, selected, onSelect, onDelete, onEdi
                 title="Remove"
               >×</button>
             </div>
-            {summary && <p className="text-gray-500 mt-0.5 truncate">{summary}</p>}
+            {summary && <p className="text-gray-500 mt-0.5 truncate" title={summary}>{summary}</p>}
           </div>
         </div>
       )}
@@ -287,7 +288,7 @@ function HistoryCard({ item, summary, onCopyToQueue }: { item: QueueItem; summar
   const exitStatus = item.result?.exit_status ?? item.status ?? '';
   const stopTime = formatDateTime(item.result?.time_stop);
   return (
-    <div className={`border rounded p-2 text-xs ${cls}`}>
+    <div className={`border border-l-4 rounded p-2 text-xs bg-indigo-50 ${cls}`}>
       <div className="flex items-start gap-1">
         <span className="font-semibold flex-1 truncate">{item.name}</span>
         {stopTime && <span className="shrink-0 text-[10px] text-gray-500">{stopTime}</span>}
@@ -300,14 +301,14 @@ function HistoryCard({ item, summary, onCopyToQueue }: { item: QueueItem; summar
           title="Copy to queue"
         >⧉</button>
       </div>
-      {summary && <p className="text-gray-500 mt-0.5 truncate">{summary}</p>}
+      {summary && <p className="text-gray-500 mt-0.5 truncate" title={summary}>{summary}</p>}
     </div>
   );
 }
 
 // ─── Main component ───────────────────────────────────────────────────────────
 
-export default function QServerPanel({ proxyUrl, serverUrl, onStatusChange }: {
+export default function QServerPanel({ proxyUrl, serverUrl: _serverUrl, onStatusChange }: {
   proxyUrl: string;
   serverUrl: string;
   onStatusChange?: (status: ServerStatus | null) => void;
@@ -554,14 +555,6 @@ setReRuns(runs ?? null);
     } catch (e) { console.error(e); }
   };
 
-  const handleOpenEnv = async () => {
-    try { await api('/api/environment/open', {}); refresh(); } catch (e) { console.error(e); }
-  };
-
-  const handleCloseEnv = async () => {
-    try { await api('/api/environment/close', {}); refresh(); } catch (e) { console.error(e); }
-  };
-
   const handlePauseRE = async () => {
     try { setPausePending(true); await api('/api/re/pause', { option: 'deferred' }); refresh(); } catch (e) { console.error(e); setPausePending(false); }
   };
@@ -662,20 +655,6 @@ setReRuns(runs ?? null);
         item: { item_type: 'plan', name: selectedPlan, args, kwargs, item_uid: editingItem.item_uid },
       });
       setEditingItem(null);
-      refresh();
-    } catch (e) { setSubmitError(String(e)); }
-  };
-
-  const handleExecute = async () => {
-    setSubmitMsg(''); setSubmitError('');
-    const plan = allowedPlans.find(p => p.name === selectedPlan);
-    if (!plan) return;
-    const { args, kwargs } = buildArgsKwargs(paramValues, plan);
-    try {
-      await api('/api/queue/item/execute', {
-        item: { item_type: 'plan', name: selectedPlan, args, kwargs },
-      });
-      setSubmitMsg('Executing…');
       refresh();
     } catch (e) { setSubmitError(String(e)); }
   };

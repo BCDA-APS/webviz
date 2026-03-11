@@ -7,7 +7,9 @@ import RunDataTab from './components/RunDataTab';
 import RunMetadataTab from './components/RunMetadataTab';
 import RunSummaryTab from './components/RunSummaryTab';
 import QServerPanel from './components/QServerPanel';
+import GridScanPanel from './components/GridScanPanel';
 import type { Panel, XYTrace, TraceStyle } from './types';
+import { DEFAULT_TRACE_STYLE } from './constants';
 import { fitData, MODEL_NAMES } from './fitting';
 import type { FitResult } from './fitting';
 
@@ -168,6 +170,8 @@ export default function App() {
   const [selectedRunDetectors, setSelectedRunDetectors] = useState<string[]>([]);
   const [selectedRunMotors, setSelectedRunMotors] = useState<string[]>([]);
   const [selectedRunAcquiring, setSelectedRunAcquiring] = useState(false);
+  const [selectedRunShape, setSelectedRunShape] = useState<number[] | null>(null);
+  const [selectedRunHintsDimensions, setSelectedRunHintsDimensions] = useState<string[][] | null>(null);
   const [runPage, setRunPage] = useState(0);
   const [autoFollow, setAutoFollow] = useState(false);
   const [sidebarCollapsed, setSidebarCollapsed] = useState(false);
@@ -194,6 +198,7 @@ export default function App() {
   const [showSettings, setShowSettings] = useState(false);
   const settingsRef = useRef<HTMLDivElement>(null);
   const qserverEnabled = settings.qserverEnabled !== false;
+  const isGridScan = selectedRunShape !== null && selectedRunShape.length === 2 && selectedRunHintsDimensions !== null;
   const updateSetting = <K extends keyof typeof settings>(key: K, val: (typeof settings)[K]) => {
     const next = { ...settings, [key]: val };
     setSettings(next);
@@ -201,7 +206,7 @@ export default function App() {
   };
   const [splitQsWidth, setSplitQsWidth] = useState(() => Math.round(window.innerWidth * 0.45));
   const [qsInputUrl, setQsInputUrl] = useState(loadQsUrl);
-  const [qsInputApiKey, setQsInputApiKey] = useState(() => localStorage.getItem('qsApiKey') ?? '');
+  const [qsInputApiKey] = useState(() => localStorage.getItem('qsApiKey') ?? '');
   const [qsProxyUrl, setQsProxyUrl] = useState(() => toQsProxyUrl(loadQsUrl()));
   const [recentQsServers, setRecentQsServers] = useState<string[]>(loadRecentQsServers);
   const [showQsDropdown, setShowQsDropdown] = useState(false);
@@ -211,8 +216,6 @@ export default function App() {
   const [qsStatus, setQsStatus] = useState<{ manager_state: string; re_state: string; items_in_queue: number; queue_stop_pending: boolean; worker_environment_exists: boolean } | null>(null);
   const [qsConnectStatus, setQsConnectStatus] = useState<'idle' | 'connecting' | 'ok' | 'error'>('idle');
   const qsConnectTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
-  const [pausePending, setPausePending] = useState(false);
-  const [resumePending, setResumePending] = useState(false);
   const [traceStyles, setTraceStyles] = useState<TraceStyle[]>([]);
   const [cursor1, setCursor1] = useState<number | null>(null);
   const [cursor1Y, setCursor1Y] = useState<number | null>(null);
@@ -234,6 +237,29 @@ export default function App() {
       if (splitView) setSplitView(false);
     }
   }, [qserverEnabled]); // eslint-disable-line react-hooks/exhaustive-deps
+
+  // Fetch grid scan metadata (shape + hints) when a run is selected
+  useEffect(() => {
+    setSelectedRunShape(null);
+    setSelectedRunHintsDimensions(null);
+    if (!selectedRunId || !serverUrl) return;
+    const cs = catSeg(selectedCatalog);
+    fetch(`${serverUrl}/api/v1/metadata${cs}/${selectedRunId}`)
+      .then(r => r.ok ? r.json() : null)
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      .then((j: any) => {
+        const start = j?.data?.attributes?.metadata?.start;
+        if (!start) return;
+        const shape: number[] | undefined = start.shape;
+        const dims = start.hints?.dimensions;
+        if (Array.isArray(shape) && shape.length === 2) setSelectedRunShape(shape);
+        // dims format: [[motorList, streamName], ...] — extract just the motor name lists
+        if (Array.isArray(dims) && dims.length === 2)
+          // eslint-disable-next-line @typescript-eslint/no-explicit-any
+          setSelectedRunHintsDimensions(dims.map((d: any) => d[0]));
+      })
+      .catch(() => {});
+  }, [selectedRunId, serverUrl, selectedCatalog]);
 
   // Close settings dropdown on outside click
   useEffect(() => {
@@ -294,7 +320,7 @@ export default function App() {
   const handleTraceStyleChange = useCallback((i: number, patch: Partial<TraceStyle>) => {
     setTraceStyles(prev => {
       const next = [...prev];
-      next[i] = { color: '', lineWidth: 2, lineDash: 'solid', markerSymbol: 'circle', ...(next[i] ?? {}), ...patch };
+      next[i] = { ...DEFAULT_TRACE_STYLE, ...(next[i] ?? {}), ...patch };
       return next;
     });
   }, []);
@@ -369,26 +395,6 @@ export default function App() {
     try { await fetch(`${qsProxyUrl}${path}`, { method: 'POST', headers, body: '{}' }); } catch (e) { console.error(e); }
   };
 
-  const handleQsPauseRE = async () => {
-    setPausePending(true);
-    const apiKey = localStorage.getItem('qsApiKey') ?? '';
-    const headers: Record<string, string> = { 'Content-Type': 'application/json' };
-    if (apiKey) headers['Authorization'] = `ApiKey ${apiKey}`;
-    try { await fetch(`${qsProxyUrl}/api/re/pause`, { method: 'POST', headers, body: JSON.stringify({ option: 'deferred' }) }); } catch (e) { console.error(e); }
-  };
-
-  const handleQsResumeRE = async () => {
-    setResumePending(true);
-    const apiKey = localStorage.getItem('qsApiKey') ?? '';
-    const headers: Record<string, string> = { 'Content-Type': 'application/json' };
-    if (apiKey) headers['Authorization'] = `ApiKey ${apiKey}`;
-    try { await fetch(`${qsProxyUrl}/api/re/resume`, { method: 'POST', headers, body: '{}' }); } catch (e) { console.error(e); }
-  };
-
-  useEffect(() => {
-    if (qsStatus?.re_state !== 'running') setPausePending(false);
-    if (qsStatus?.re_state !== 'paused') setResumePending(false);
-  }, [qsStatus?.re_state]);
 
   useEffect(() => {
     if (qsStatus !== null) {
@@ -506,7 +512,7 @@ export default function App() {
     setAddRunId(runId);
     setAddRunError(null);
     try {
-      const traces = await fetchRunTraces(serverUrl, selectedCatalog, runId, label, detectors, motors, preferX, preferYs);
+      const traces = await fetchRunTraces(serverUrl, selectedCatalog ?? '', runId, label, detectors, motors, preferX, preferYs);
       if (hasGraph) {
         addTraces(traces);
       } else {
@@ -691,7 +697,7 @@ export default function App() {
                 </div>
               )}
             </div>
-            <button onClick={handleConnect} className="shrink-0 bg-sky-600 hover:bg-sky-500 active:bg-sky-700 text-white text-xs px-3 py-1.5 rounded font-medium transition-colors">Connect</button>
+            <button onClick={() => handleConnect()} className="shrink-0 bg-sky-600 hover:bg-sky-500 active:bg-sky-700 text-white text-xs px-3 py-1.5 rounded font-medium transition-colors">Connect</button>
             {tiledStatus === 'connecting' && <span className="shrink-0 flex items-center gap-1.5 text-xs text-sky-300"><span className="w-2 h-2 rounded-full bg-sky-400 animate-pulse" />Connecting…</span>}
             {tiledStatus === 'ok' && <span className="shrink-0 flex items-center gap-1.5 text-xs text-green-400"><span className="w-2 h-2 rounded-full bg-green-400" />Connected</span>}
             {tiledStatus === 'error' && <span className="shrink-0 flex items-center gap-1.5 text-xs text-red-400"><span className="w-2 h-2 rounded-full bg-red-400" />Failed</span>}
@@ -760,7 +766,7 @@ export default function App() {
                 </div>
               )}
             </div>
-            <button onClick={handleQsConnect} className="shrink-0 bg-sky-600 hover:bg-sky-500 active:bg-sky-700 text-white text-xs px-3 py-1.5 rounded font-medium transition-colors">Connect</button>
+            <button onClick={() => handleQsConnect()} className="shrink-0 bg-sky-600 hover:bg-sky-500 active:bg-sky-700 text-white text-xs px-3 py-1.5 rounded font-medium transition-colors">Connect</button>
             {qsConnectStatus === 'connecting' && <span className="shrink-0 flex items-center gap-1.5 text-xs text-sky-300"><span className="w-2 h-2 rounded-full bg-sky-400 animate-pulse" />Connecting…</span>}
             {qsConnectStatus === 'ok' && <span className="shrink-0 flex items-center gap-1.5 text-xs text-green-400"><span className="w-2 h-2 rounded-full bg-green-400" />Connected</span>}
             {qsConnectStatus === 'error' && <span className="shrink-0 flex items-center gap-1.5 text-xs text-red-400"><span className="w-2 h-2 rounded-full bg-red-400" />Failed</span>}
@@ -817,7 +823,7 @@ export default function App() {
           )}
           {/* Tiled controls (visualizer tab only) */}
           {appTab === 'visualizer' && (
-            <div className="ml-auto flex items-center gap-2 overflow-hidden shrink-0">
+            <div className="ml-auto flex items-center gap-2 shrink-0">
               <label className="text-sky-300 text-xs font-medium shrink-0">Server</label>
               <div className="relative" ref={serverComboRef}>
                 <div className="flex">
@@ -845,7 +851,7 @@ export default function App() {
                   </div>
                 )}
               </div>
-              <button onClick={handleConnect} className="shrink-0 bg-sky-600 hover:bg-sky-500 active:bg-sky-700 text-white text-xs px-3 py-1.5 rounded font-medium transition-colors">Connect</button>
+              <button onClick={() => handleConnect()} className="shrink-0 bg-sky-600 hover:bg-sky-500 active:bg-sky-700 text-white text-xs px-3 py-1.5 rounded font-medium transition-colors">Connect</button>
               {tiledStatus === 'connecting' && <span className="shrink-0 flex items-center gap-1.5 text-xs text-sky-300"><span className="w-2 h-2 rounded-full bg-sky-400 animate-pulse" />Connecting…</span>}
               {tiledStatus === 'ok' && <span className="shrink-0 flex items-center gap-1.5 text-xs text-green-400"><span className="w-2 h-2 rounded-full bg-green-400" />Connected</span>}
               {tiledStatus === 'error' && <span className="shrink-0 flex items-center gap-1.5 text-xs text-red-400"><span className="w-2 h-2 rounded-full bg-red-400" />Failed</span>}
@@ -863,7 +869,7 @@ export default function App() {
           )}
           {/* QServer controls (qserver tab only) */}
           {appTab === 'qserver' && (
-            <div className="ml-auto flex items-center gap-2 overflow-hidden shrink-0">
+            <div className="ml-auto flex items-center gap-2 shrink-0">
               {qsStatus && (
                 <>
                   <button onClick={handleQsEnvToggle} className={`shrink-0 text-xs px-2 py-1.5 rounded font-medium transition-colors ${qsStatus.worker_environment_exists ? 'bg-red-400 hover:bg-red-300 text-white' : 'bg-emerald-600 hover:bg-emerald-500 text-white'}`}>
@@ -914,7 +920,7 @@ export default function App() {
                   </div>
                 )}
               </div>
-              <button onClick={handleQsConnect} className="shrink-0 bg-sky-600 hover:bg-sky-500 active:bg-sky-700 text-white text-xs px-3 py-1.5 rounded font-medium transition-colors">Connect</button>
+              <button onClick={() => handleQsConnect()} className="shrink-0 bg-sky-600 hover:bg-sky-500 active:bg-sky-700 text-white text-xs px-3 py-1.5 rounded font-medium transition-colors">Connect</button>
               {qsConnectStatus === 'connecting' && <span className="shrink-0 flex items-center gap-1.5 text-xs text-sky-300"><span className="w-2 h-2 rounded-full bg-sky-400 animate-pulse" />Connecting…</span>}
               {qsConnectStatus === 'ok' && <span className="shrink-0 flex items-center gap-1.5 text-xs text-green-400"><span className="w-2 h-2 rounded-full bg-green-400" />Connected</span>}
               {qsConnectStatus === 'error' && <span className="shrink-0 flex items-center gap-1.5 text-xs text-red-400"><span className="w-2 h-2 rounded-full bg-red-400" />Failed</span>}
@@ -1077,6 +1083,8 @@ export default function App() {
                 {centerTab === 'graph' && (
                   panel ? (
                     <VisualizationPanel panel={panel} onRemove={() => { setPanel(null); setFitResults(null); }} onRemoveTrace={handleRemoveTrace} onStopLive={stopLive} onLiveTracesUpdate={handleLiveTracesUpdate} extraTraces={derivativeTraces} onRemoveExtraTrace={() => setShowDerivative(false)} xLog={xLog} yLog={yLog} fitResults={fitResults} traceStyles={traceStyles} cursor1={cursor1} cursor2={cursor2} cursor1Y={cursor1Y} cursor2Y={cursor2Y} onPlotClick={handlePlotClick} />
+                  ) : isGridScan ? (
+                    <GridScanPanel serverUrl={serverUrl} catalog={selectedCatalog} runId={selectedRunId} shape={selectedRunShape as [number, number]} dimensions={selectedRunHintsDimensions!} />
                   ) : (
                     <div className="h-full flex flex-col items-center justify-center text-gray-400 select-none">
                       <svg className="h-16 w-16 mb-4 opacity-30" fill="none" viewBox="0 0 24 24" stroke="currentColor">
@@ -1178,6 +1186,8 @@ export default function App() {
                 {centerTab === 'graph' && (
                   panel ? (
                     <VisualizationPanel panel={panel} onRemove={() => { setPanel(null); setFitResults(null); }} onRemoveTrace={handleRemoveTrace} onStopLive={stopLive} onLiveTracesUpdate={handleLiveTracesUpdate} extraTraces={derivativeTraces} onRemoveExtraTrace={() => setShowDerivative(false)} xLog={xLog} yLog={yLog} fitResults={fitResults} traceStyles={traceStyles} cursor1={cursor1} cursor2={cursor2} cursor1Y={cursor1Y} cursor2Y={cursor2Y} onPlotClick={handlePlotClick} />
+                  ) : isGridScan ? (
+                    <GridScanPanel serverUrl={serverUrl} catalog={selectedCatalog} runId={selectedRunId} shape={selectedRunShape as [number, number]} dimensions={selectedRunHintsDimensions!} />
                   ) : (
                     <div className="h-full flex flex-col items-center justify-center text-gray-400 select-none">
                       <svg className="h-16 w-16 mb-4 opacity-30" fill="none" viewBox="0 0 24 24" stroke="currentColor">

@@ -8,9 +8,15 @@ type Props = {
 
 const catSeg = (c: string | null) => c ? `/${c}` : '';
 
+type TableSource = {
+  tableUrl: string;
+  // Base path for fetching individual arrays if table/full returns 404
+  arrayBase: string | null;
+};
+
 // Probe a stream to find the correct table URL, mirroring FieldSelector logic.
-// Returns the full table URL or null if no tabular data found.
-async function resolveTableUrl(serverUrl: string, catalog: string | null, runId: string, stream: string): Promise<string | null> {
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+async function resolveTableSource(serverUrl: string, catalog: string | null, runId: string, stream: string): Promise<TableSource | null> {
   const cs = catSeg(catalog);
   const searchUrl = `${serverUrl}/api/v1/search${cs}/${runId}/${stream}?page[limit]=200`;
   const r = await fetch(searchUrl);
@@ -23,29 +29,53 @@ async function resolveTableUrl(serverUrl: string, catalog: string | null, runId:
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   const tableItem = items.find((item: any) => item.attributes?.structure_family === 'table');
   if (tableItem) {
-    return `${serverUrl}/api/v1/table/full${cs}/${runId}/${stream}/${tableItem.id}?format=application/json`;
+    return { tableUrl: `${serverUrl}/api/v1/table/full${cs}/${runId}/${stream}/${tableItem.id}?format=application/json`, arrayBase: null };
   }
 
   // Case 2: arrays directly under stream — try fetching stream as a table
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   const hasArrays = items.some((item: any) => item.attributes?.structure_family === 'array');
   if (hasArrays) {
-    return `${serverUrl}/api/v1/table/full${cs}/${runId}/${stream}?format=application/json`;
+    return {
+      tableUrl: `${serverUrl}/api/v1/table/full${cs}/${runId}/${stream}?format=application/json`,
+      arrayBase: `${serverUrl}/api/v1/array/full${cs}/${runId}/${stream}`,
+    };
   }
 
   // Case 3: sub-nodes (MongoDB adapter: primary/data or primary/internal)
   for (const sub of ['data', 'internal']) {
-    const subR = await fetch(`${serverUrl}/api/v1/search${cs}/${runId}/${stream}/${sub}?page[limit]=10`);
+    const subPath = `${cs}/${runId}/${stream}/${sub}`;
+    const subR = await fetch(`${serverUrl}/api/v1/search${subPath}?page[limit]=200`);
     if (subR.ok) {
       const subJson = await subR.json();
       // eslint-disable-next-line @typescript-eslint/no-explicit-any
-      if ((subJson.data ?? []).some((item: any) => item.attributes?.structure_family === 'array')) {
-        return `${serverUrl}/api/v1/table/full${cs}/${runId}/${stream}/${sub}?format=application/json`;
+      const arrayItems: any[] = (subJson.data ?? []).filter((item: any) => item.attributes?.structure_family === 'array');
+      if (arrayItems.length > 0) {
+        return {
+          tableUrl: `${serverUrl}/api/v1/table/full${subPath}?format=application/json`,
+          arrayBase: `${serverUrl}/api/v1/array/full${subPath}`,
+          // Attach column names discovered during probing so we don't need to re-fetch
+          // eslint-disable-next-line @typescript-eslint/no-explicit-any
+          ...{ columns: arrayItems.map((item: any) => item.id) },
+        } as TableSource & { columns: string[] };
       }
     }
   }
 
   return null;
+}
+
+// Fetch each column individually and assemble into a table record.
+async function fetchColumnarData(arrayBase: string, columns: string[]): Promise<Record<string, unknown[]>> {
+  const entries = await Promise.all(
+    columns.map(async col => {
+      const r = await fetch(`${arrayBase}/${col}?format=application/json`);
+      if (!r.ok) return [col, []] as [string, unknown[]];
+      const data = await r.json();
+      return [col, Array.isArray(data) ? data : []] as [string, unknown[]];
+    })
+  );
+  return Object.fromEntries(entries);
 }
 
 export default function RunDataTab({ serverUrl, catalog, runId }: Props) {
@@ -79,14 +109,29 @@ export default function RunDataTab({ serverUrl, catalog, runId }: Props) {
 
     (async () => {
       try {
-        const url = await resolveTableUrl(serverUrl, catalog, runId, activeStream);
+        const source = await resolveTableSource(serverUrl, catalog, runId, activeStream);
         if (cancelled) return;
-        if (!url) { setError('No tabular data found in this stream'); return; }
-        const r = await fetch(url);
+        if (!source) { setError('No tabular data found in this stream'); return; }
+
+        const r = await fetch(source.tableUrl);
         if (cancelled) return;
-        if (!r.ok) throw new Error(`HTTP ${r.status}`);
-        const d = await r.json();
-        if (!cancelled) setData(d);
+
+        if (r.ok) {
+          const d = await r.json();
+          if (!cancelled) setData(d);
+        } else if (r.status === 404 && source.arrayBase) {
+          // Older servers (MongoDB adapter) may not support table/full — fetch columns individually
+          const cols: string[] = (source as TableSource & { columns?: string[] }).columns
+            ?? await fetch(`${source.arrayBase.replace('/api/v1/array/full', '/api/v1/search')}?page[limit]=200`)
+              .then(sr => sr.json())
+              // eslint-disable-next-line @typescript-eslint/no-explicit-any
+              .then(sj => (sj.data ?? []).filter((i: any) => i.attributes?.structure_family === 'array').map((i: any) => i.id));
+          if (cancelled) return;
+          const d = await fetchColumnarData(source.arrayBase, cols);
+          if (!cancelled) setData(d);
+        } else {
+          throw new Error(`HTTP ${r.status}`);
+        }
       } catch (e) {
         if (!cancelled) setError(String(e));
       } finally {

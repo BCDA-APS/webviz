@@ -69,7 +69,7 @@ function plotlyDash(lineDash: string): string {
   return lineDash;
 }
 
-function TraceChip({ t, i, style, color, onRemove }: {
+function TraceChip({ t, i: _i, style, color, onRemove }: {
   t: XYTrace; i: number; style: TraceStyle; color: string;
   onRemove?: () => void;
 }) {
@@ -199,23 +199,6 @@ function XYPanelContent({ panel, onRemove, onRemoveTrace, onStopLive, onLiveTrac
   const displayTraces = [...baseTraces, ...(extraTraces ?? [])];
   const xAxisTitle = displayTraces[0]?.xLabel ?? '';
   const yAxisTitle = displayTraces.length === 1 ? displayTraces[0].yLabel : 'Value';
-
-  // Compute the data y-range and x-range so cursor lines don't corrupt Plotly's autoscale
-  let _yMin = Infinity, _yMax = -Infinity, _xMin = Infinity, _xMax = -Infinity;
-  for (const t of displayTraces) {
-    for (const v of t.y) { if (v < _yMin) _yMin = v; if (v > _yMax) _yMax = v; }
-    for (const v of t.x) { if (v < _xMin) _xMin = v; if (v > _xMax) _xMax = v; }
-  }
-  if (fitResults) {
-    for (const v of fitResults.yFit) { if (v < _yMin) _yMin = v; if (v > _yMax) _yMax = v; }
-    for (const v of fitResults.xFit) { if (v < _xMin) _xMin = v; if (v > _xMax) _xMax = v; }
-  }
-  const _yPad = isFinite(_yMax - _yMin) ? (_yMax - _yMin) * 0.15 : 1;
-  const _xPad = isFinite(_xMax - _xMin) ? (_xMax - _xMin) * 0.05 : 1;
-  const cursorY0 = isFinite(_yMin) ? _yMin - _yPad : -1;
-  const cursorY1 = isFinite(_yMax) ? _yMax + _yPad : 1;
-  const cursorX0 = isFinite(_xMin) ? _xMin - _xPad : -1;
-  const cursorX1 = isFinite(_xMax) ? _xMax + _xPad : 1;
 
   const extractPlotCoords = (e: React.MouseEvent<HTMLDivElement>): [number, number] | null => {
     const plotDiv = wrapperRef.current?.querySelector('.js-plotly-plot') as any;
