@@ -172,6 +172,7 @@ export default function App() {
   const [selectedRunAcquiring, setSelectedRunAcquiring] = useState(false);
   const [selectedRunShape, setSelectedRunShape] = useState<number[] | null>(null);
   const [selectedRunHintsDimensions, setSelectedRunHintsDimensions] = useState<string[][] | null>(null);
+  const [gridZField, setGridZField] = useState('');
   const [showGridHeatmap, setShowGridHeatmap] = useState(false);
   const pendingGridHeatmapRef = useRef(false);
   const [runPage, setRunPage] = useState(0);
@@ -246,6 +247,7 @@ export default function App() {
   useEffect(() => {
     setSelectedRunShape(null);
     setSelectedRunHintsDimensions(null);
+    setGridZField('');
     setShowGridHeatmap(false);
     if (!selectedRunId || !serverUrl) return;
     const cs = catSeg(selectedCatalog);
@@ -1072,6 +1074,7 @@ export default function App() {
                       onAddTraces={panel?.type === 'xy' ? addTraces : null}
                       onLivePlot={livePlot}
                       onRemoveRunTraces={removeRunTraces}
+                      onZSelect={isGridScan ? setGridZField : undefined}
                     />
                   </div>
                 </>
@@ -1128,7 +1131,7 @@ export default function App() {
               <div className="flex-1 overflow-hidden p-4">
                 {centerTab === 'graph' && (
                   showGridHeatmap && isGridScan ? (
-                    <GridScanPanel serverUrl={serverUrl} catalog={selectedCatalog} runId={selectedRunId} shape={selectedRunShape as [number, number] | null} dimensions={selectedRunHintsDimensions!} />
+                    <GridScanPanel serverUrl={serverUrl} catalog={selectedCatalog} runId={selectedRunId} shape={selectedRunShape as [number, number] | null} dimensions={selectedRunHintsDimensions!} zField={gridZField} onAnalyzeCut={(x, y, xLabel, yLabel, title) => { setShowGridHeatmap(false); setPanel({ id: crypto.randomUUID(), type: 'xy', traces: [{ x, y, xLabel, yLabel, runLabel: selectedRunLabel, runId: selectedRunId }], title }); setFitResults(null); setShowDerivative(false); }} />
                   ) : panel ? (
                     <VisualizationPanel panel={panel} onRemove={() => { setPanel(null); setFitResults(null); if (isGridScan) setShowGridHeatmap(true); }} onRemoveTrace={handleRemoveTrace} onStopLive={stopLive} onLiveTracesUpdate={handleLiveTracesUpdate} extraTraces={derivativeTraces} onRemoveExtraTrace={() => setShowDerivative(false)} xLog={xLog} yLog={yLog} fitResults={fitResults} traceStyles={traceStyles} cursor1={cursor1} cursor2={cursor2} cursor1Y={cursor1Y} cursor2Y={cursor2Y} onPlotClick={handlePlotClick} />
                   ) : (
@@ -1231,7 +1234,7 @@ export default function App() {
               <div className="flex-1 overflow-hidden p-4">
                 {centerTab === 'graph' && (
                   showGridHeatmap && isGridScan ? (
-                    <GridScanPanel serverUrl={serverUrl} catalog={selectedCatalog} runId={selectedRunId} shape={selectedRunShape as [number, number] | null} dimensions={selectedRunHintsDimensions!} />
+                    <GridScanPanel serverUrl={serverUrl} catalog={selectedCatalog} runId={selectedRunId} shape={selectedRunShape as [number, number] | null} dimensions={selectedRunHintsDimensions!} zField={gridZField} onAnalyzeCut={(x, y, xLabel, yLabel, title) => { setShowGridHeatmap(false); setPanel({ id: crypto.randomUUID(), type: 'xy', traces: [{ x, y, xLabel, yLabel, runLabel: selectedRunLabel, runId: selectedRunId }], title }); setFitResults(null); setShowDerivative(false); }} />
                   ) : panel ? (
                     <VisualizationPanel panel={panel} onRemove={() => { setPanel(null); setFitResults(null); if (isGridScan) setShowGridHeatmap(true); }} onRemoveTrace={handleRemoveTrace} onStopLive={stopLive} onLiveTracesUpdate={handleLiveTracesUpdate} extraTraces={derivativeTraces} onRemoveExtraTrace={() => setShowDerivative(false)} xLog={xLog} yLog={yLog} fitResults={fitResults} traceStyles={traceStyles} cursor1={cursor1} cursor2={cursor2} cursor1Y={cursor1Y} cursor2Y={cursor2Y} onPlotClick={handlePlotClick} />
                   ) : (

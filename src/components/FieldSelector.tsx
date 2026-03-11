@@ -18,6 +18,8 @@ type FieldSelectorProps = {
   onAddTraces: ((traces: XYTrace[]) => void) | null;
   onLivePlot: ((traces: XYTrace[], title: string, stream: string, dataSubNode: string, dataNodeFamily: 'array' | 'table') => void) | null;
   onRemoveRunTraces?: (runId: string) => void;
+  /** When provided, switches to single-select Z mode for heatmap field selection */
+  onZSelect?: (field: string) => void;
 };
 
 export type FieldSelectorHandle = { schedulePlot: () => void; scheduleLive: () => void; removeY: (yLabel: string) => void };
@@ -27,8 +29,9 @@ const catSeg = (c: string | null) => c ? `/${c}` : '';
 const FieldSelector = forwardRef<FieldSelectorHandle, FieldSelectorProps>(function FieldSelector({
   serverUrl, catalog, runId, runLabel,
   runDetectors, runMotors, runAcquiring,
-  onPlot, onAddTraces, onLivePlot, onRemoveRunTraces,
+  onPlot, onAddTraces, onLivePlot, onRemoveRunTraces, onZSelect,
 }, ref) {
+  const zMode = !!onZSelect;
   const [streams, setStreams] = useState<string[]>([]);
   const [selectedStream, setSelectedStream] = useState('');
   const [fields, setFields] = useState<FieldInfo[]>([]);
@@ -172,6 +175,12 @@ const FieldSelector = forwardRef<FieldSelectorHandle, FieldSelectorProps>(functi
     }
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [sortedFields, runMotors, runDetectors]);
+
+  // In z-mode, emit the selected field whenever yFields[0] changes (auto-select or user click)
+  useEffect(() => {
+    if (zMode && yFields.length > 0) onZSelect?.(yFields[0]);
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [zMode, yFields]);
 
   const selectXField = (name: string) => {
     lastXRef.current = name;
@@ -364,20 +373,22 @@ const FieldSelector = forwardRef<FieldSelectorHandle, FieldSelectorProps>(functi
           >
             {streams.map(s => <option key={s} value={s}>{s}</option>)}
           </select>
-          <div className="ml-auto flex items-center gap-1">
-            <button
-              onClick={() => { setPendingAction(null); handlePlot(); }}
-              disabled={!xField || yFields.length === 0 || adding}
-              className="px-2 py-0.5 text-xs bg-sky-600 text-white rounded hover:bg-sky-500 disabled:opacity-40 disabled:cursor-not-allowed font-medium"
-              title="Replace plot with selected fields"
-            >{adding ? '…' : 'Plot'}</button>
-            <button
-              onClick={handleAddTraces}
-              disabled={!xField || yFields.length === 0 || adding || !onAddTraces}
-              className="px-2 py-0.5 text-xs bg-white border border-sky-600 text-sky-600 rounded hover:bg-sky-50 disabled:opacity-40 disabled:cursor-not-allowed font-medium"
-              title={onAddTraces ? 'Add curve(s) to current plot' : 'No plot open — use Plot first'}
-            >+</button>
-          </div>
+          {!zMode && (
+            <div className="ml-auto flex items-center gap-1">
+              <button
+                onClick={() => { setPendingAction(null); handlePlot(); }}
+                disabled={!xField || yFields.length === 0 || adding}
+                className="px-2 py-0.5 text-xs bg-sky-600 text-white rounded hover:bg-sky-500 disabled:opacity-40 disabled:cursor-not-allowed font-medium"
+                title="Replace plot with selected fields"
+              >{adding ? '…' : 'Plot'}</button>
+              <button
+                onClick={handleAddTraces}
+                disabled={!xField || yFields.length === 0 || adding || !onAddTraces}
+                className="px-2 py-0.5 text-xs bg-white border border-sky-600 text-sky-600 rounded hover:bg-sky-50 disabled:opacity-40 disabled:cursor-not-allowed font-medium"
+                title={onAddTraces ? 'Add curve(s) to current plot' : 'No plot open — use Plot first'}
+              >+</button>
+            </div>
+          )}
         </div>
         {error && <p className="text-xs text-red-500 mt-1">{error}</p>}
       </div>
@@ -393,8 +404,8 @@ const FieldSelector = forwardRef<FieldSelectorHandle, FieldSelectorProps>(functi
             <thead className="sticky top-0 z-10">
               <tr>
                 <th className={thClass}>Field</th>
-                <th className={`${thClass} text-center w-8`}>X</th>
-                <th className={`${thClass} text-center w-8`}>Y</th>
+                {!zMode && <th className={`${thClass} text-center w-8`}>X</th>}
+                <th className={`${thClass} text-center w-8`}>{zMode ? 'Z' : 'Y'}</th>
                 <th className={`${thClass} text-right`}>Shape</th>
               </tr>
             </thead>
@@ -410,22 +421,34 @@ const FieldSelector = forwardRef<FieldSelectorHandle, FieldSelectorProps>(functi
                       {isDet && <span className="ml-1 text-[10px] text-purple-400 font-sans">det</span>}
                       {isMotor && <span className="ml-1 text-[10px] text-green-500 font-sans">mot</span>}
                     </td>
+                    {!zMode && (
+                      <td className={`${tdClass} text-center`}>
+                        <input
+                          type="radio"
+                          name="xField"
+                          checked={xField === f.name}
+                          onChange={() => selectXField(f.name)}
+                          className="accent-sky-600"
+                        />
+                      </td>
+                    )}
                     <td className={`${tdClass} text-center`}>
-                      <input
-                        type="radio"
-                        name="xField"
-                        checked={xField === f.name}
-                        onChange={() => selectXField(f.name)}
-                        className="accent-sky-600"
-                      />
-                    </td>
-                    <td className={`${tdClass} text-center`}>
-                      <input
-                        type="checkbox"
-                        checked={yFields.includes(f.name)}
-                        onChange={() => toggleYField(f.name)}
-                        className="accent-sky-600"
-                      />
+                      {zMode ? (
+                        <input
+                          type="radio"
+                          name="zField"
+                          checked={yFields[0] === f.name}
+                          onChange={() => { setYFields([f.name]); lastYRef.current = [f.name]; }}
+                          className="accent-sky-600"
+                        />
+                      ) : (
+                        <input
+                          type="checkbox"
+                          checked={yFields.includes(f.name)}
+                          onChange={() => toggleYField(f.name)}
+                          className="accent-sky-600"
+                        />
+                      )}
                     </td>
                     <td className={`${tdClass} text-right text-gray-400`}>
                       {livePointCount !== null ? `(${livePointCount})` : `(${f.shape.join(', ')})`}
