@@ -20,18 +20,23 @@ type FieldSelectorProps = {
   onRemoveRunTraces?: (runId: string) => void;
   /** When provided, switches to single-select Z mode for heatmap field selection */
   onZSelect?: (field: string) => void;
+  /** When provided, image fields (shape ≥ 2D) show a View button instead of X/Y controls */
+  onImageOpen?: (fieldName: string, stream: string, dataSubNode: string, shape: number[]) => void;
 };
 
-export type FieldSelectorHandle = { schedulePlot: () => void; scheduleLive: () => void; removeY: (yLabel: string) => void };
+export type FieldSelectorHandle = { schedulePlot: () => void; scheduleLive: () => void; removeY: (yLabel: string) => void; scheduleImageOpen: () => void };
 
 const catSeg = (c: string | null) => c ? `/${c}` : '';
 
 const FieldSelector = forwardRef<FieldSelectorHandle, FieldSelectorProps>(function FieldSelector({
   serverUrl, catalog, runId, runLabel,
   runDetectors, runMotors, runAcquiring,
-  onPlot, onAddTraces, onLivePlot, onRemoveRunTraces, onZSelect,
+  onPlot, onAddTraces, onLivePlot, onRemoveRunTraces, onZSelect, onImageOpen,
 }, ref) {
   const zMode = !!onZSelect;
+  // A field is a 2D image if it has ≥2 shape dimensions with the last two both > 1
+  const isImageField = (f: FieldInfo) =>
+    f.shape.length >= 2 && f.shape[f.shape.length - 1] > 1 && f.shape[f.shape.length - 2] > 1;
   const [streams, setStreams] = useState<string[]>([]);
   const [selectedStream, setSelectedStream] = useState('');
   const [fields, setFields] = useState<FieldInfo[]>([]);
@@ -49,9 +54,40 @@ const FieldSelector = forwardRef<FieldSelectorHandle, FieldSelectorProps>(functi
   const [dataSubNode, setDataSubNode] = useState('');
   const [dataNodeFamily, setDataNodeFamily] = useState<'array' | 'table'>('array');
   const [livePointCount, setLivePointCount] = useState<number | null>(null);
+  const [imageYField, setImageYField] = useState<string | null>(null);
+  // Remembers the last manually-chosen image field across run changes
+  const lastImageFieldRef = useRef<string | null>(null);
+  // Set to true on run change so fields-load auto-select fires exactly once per run
+  const autoSelectImagePending = useRef(false);
+  // Set to true when scheduleImageOpen is called before fields have loaded
+  const pendingImageOpenRef = useRef(false);
 
   // Reset removedTracesRef when the run changes so it doesn't bleed into the next run
-  useEffect(() => { removedTracesRef.current = false; }, [runId]);
+  useEffect(() => {
+    removedTracesRef.current = false;
+    setImageYField(null);
+    autoSelectImagePending.current = true;
+  }, [runId]);
+
+  // Auto-select image field once per run when fields finish loading
+  useEffect(() => {
+    if (!onImageOpen || !autoSelectImagePending.current) return;
+    const imageFields = fields.filter(isImageField);
+    if (imageFields.length === 0) {
+      // No image fields — if a deferred image open was requested, fall back to plot
+      if (pendingImageOpenRef.current) { pendingImageOpenRef.current = false; setPendingAction('plot'); }
+      return;
+    }
+    autoSelectImagePending.current = false;
+    const remembered = lastImageFieldRef.current;
+    const match = remembered ? imageFields.find(f => f.name === remembered) : null;
+    const chosen = match ? match : imageFields[0];
+    setImageYField(chosen.name);
+    if (pendingImageOpenRef.current) {
+      pendingImageOpenRef.current = false;
+      onImageOpen(chosen.name, selectedStream, dataSubNode, chosen.shape);
+    }
+  }, [fields, onImageOpen]); // eslint-disable-line react-hooks/exhaustive-deps
 
   // Fetch streams for this run
   useEffect(() => {
@@ -295,7 +331,19 @@ const FieldSelector = forwardRef<FieldSelectorHandle, FieldSelectorProps>(functi
         return next;
       });
     },
-  }), []);
+    scheduleImageOpen: () => {
+      if (!onImageOpen) { setPendingAction('plot'); return; }
+      // If image field already selected and stream/dataSubNode are ready, open immediately
+      const f = fields.find(fi => fi.name === imageYField);
+      if (imageYField && f && selectedStream && dataSubNode) {
+        onImageOpen(imageYField, selectedStream, dataSubNode, f.shape);
+      } else {
+        // Defer: auto-select will fire and then open
+        pendingImageOpenRef.current = true;
+        autoSelectImagePending.current = true;
+      }
+    },
+  }), [onImageOpen, imageYField, fields, selectedStream, dataSubNode]); // eslint-disable-line react-hooks/exhaustive-deps
 
   // Fetch table row count for shape display — polls every 2s while acquiring, once when completed
   useEffect(() => {
@@ -375,18 +423,30 @@ const FieldSelector = forwardRef<FieldSelectorHandle, FieldSelectorProps>(functi
           </select>
           {!zMode && (
             <div className="ml-auto flex items-center gap-1">
-              <button
-                onClick={() => { setPendingAction(null); handlePlot(); }}
-                disabled={!xField || yFields.length === 0 || adding}
-                className="px-2 py-0.5 text-xs bg-sky-600 text-white rounded hover:bg-sky-500 disabled:opacity-40 disabled:cursor-not-allowed font-medium"
-                title="Replace plot with selected fields"
-              >{adding ? '…' : 'Plot'}</button>
-              <button
-                onClick={handleAddTraces}
-                disabled={!xField || yFields.length === 0 || adding || !onAddTraces}
-                className="px-2 py-0.5 text-xs bg-white border border-sky-600 text-sky-600 rounded hover:bg-sky-50 disabled:opacity-40 disabled:cursor-not-allowed font-medium"
-                title={onAddTraces ? 'Add curve(s) to current plot' : 'No plot open — use Plot first'}
-              >+</button>
+              {onImageOpen && imageYField ? (
+                <button
+                  onClick={() => {
+                    const f = fields.find(fi => fi.name === imageYField);
+                    if (f) onImageOpen(imageYField, selectedStream, dataSubNode, f.shape);
+                  }}
+                  className="px-2 py-0.5 text-xs bg-sky-600 text-white rounded hover:bg-sky-500 font-medium"
+                >View image</button>
+              ) : (
+                <>
+                  <button
+                    onClick={() => { setPendingAction(null); handlePlot(); }}
+                    disabled={!xField || yFields.length === 0 || adding}
+                    className="px-2 py-0.5 text-xs bg-sky-600 text-white rounded hover:bg-sky-500 disabled:opacity-40 disabled:cursor-not-allowed font-medium"
+                    title="Replace plot with selected fields"
+                  >{adding ? '…' : 'Plot'}</button>
+                  <button
+                    onClick={handleAddTraces}
+                    disabled={!xField || yFields.length === 0 || adding || !onAddTraces}
+                    className="px-2 py-0.5 text-xs bg-white border border-sky-600 text-sky-600 rounded hover:bg-sky-50 disabled:opacity-40 disabled:cursor-not-allowed font-medium"
+                    title={onAddTraces ? 'Add curve(s) to current plot' : 'No plot open — use Plot first'}
+                  >+</button>
+                </>
+              )}
             </div>
           )}
         </div>
@@ -414,6 +474,7 @@ const FieldSelector = forwardRef<FieldSelectorHandle, FieldSelectorProps>(functi
                 const isDet = matchesDev(f.name, runDetectors);
                 const isMotor = f.name !== 'time' && matchesDev(f.name, runMotors);
                 const rowBg = i % 2 === 0 ? 'bg-white' : 'bg-gray-50';
+                const isImg = onImageOpen && isImageField(f);
                 return (
                   <tr key={f.name} className={`cursor-pointer hover:bg-sky-50 ${rowBg}`}>
                     <td className={`${tdClass} font-mono`}>
@@ -423,17 +484,28 @@ const FieldSelector = forwardRef<FieldSelectorHandle, FieldSelectorProps>(functi
                     </td>
                     {!zMode && (
                       <td className={`${tdClass} text-center`}>
-                        <input
-                          type="radio"
-                          name="xField"
-                          checked={xField === f.name}
-                          onChange={() => selectXField(f.name)}
-                          className="accent-sky-600"
-                        />
+                        {!isImg && (
+                          <input
+                            type="radio"
+                            name="xField"
+                            checked={xField === f.name}
+                            onChange={() => selectXField(f.name)}
+                            className="accent-sky-600"
+                          />
+                        )}
                       </td>
                     )}
                     <td className={`${tdClass} text-center`}>
-                      {zMode ? (
+                      {isImg ? (
+                        <input
+                          type="radio"
+                          name="imageYField"
+                          checked={imageYField === f.name}
+                          onChange={() => { setImageYField(f.name); lastImageFieldRef.current = f.name; }}
+                          onClick={() => { if (imageYField === f.name) setImageYField(null); }}
+                          className="accent-sky-600"
+                        />
+                      ) : zMode ? (
                         <input
                           type="radio"
                           name="zField"

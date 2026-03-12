@@ -1,6 +1,10 @@
 import { useState, useEffect, useRef, useMemo, useCallback } from 'react';
 import { PlotlyScatter } from '@blueskyproject/finch';
 
+// PlotlyScatter internal margins (from finch source) — keep in sync to align canvas with plots
+// l=60 (y-title present), r=30, t=30, b=70 + pb-4 wrapper (16px) = 86
+const PLOT_T = 30, PLOT_B = 86, PLOT_L = 60, PLOT_R = 30;
+
 type Props = {
   serverUrl: string;
   catalog: string | null;
@@ -259,6 +263,14 @@ export default function GridScanPanel({ serverUrl, catalog, runId, dimensions, z
   const nRows = zMatrix?.length ?? 0;
   const nCols = zMatrix?.[0]?.length ?? 0;
 
+  // Global z range for crosshair line spans (so lines are always full-height/full-width)
+  const { globalZMin, globalZMax } = useMemo(() => {
+    if (!zMatrix) return { globalZMin: 0, globalZMax: 1 };
+    let mn = Infinity, mx = -Infinity;
+    for (const row of zMatrix) for (const v of row) { if (isFinite(v) && v < mn) mn = v; if (isFinite(v) && v > mx) mx = v; }
+    return { globalZMin: mn, globalZMax: mx };
+  }, [zMatrix]);
+
   // Keep vpRef in sync with current effective viewport
   useEffect(() => {
     vpRef.current = viewport ?? { r0: 0, r1: nRows, c0: 0, c1: nCols };
@@ -421,15 +433,32 @@ export default function GridScanPanel({ serverUrl, catalog, runId, dimensions, z
 
   const horizCut = useMemo(() => {
     if (crossRow === null || !zMatrix) return null;
-    return { x: fastAxis, y: zMatrix[crossRow] };
+    const y = zMatrix[crossRow];
+    let mn = Infinity, mx = -Infinity;
+    for (const v of y) { if (v < mn) mn = v; if (v > mx) mx = v; }
+    return { x: fastAxis, y, yMin: mn, yMax: mx };
   }, [crossRow, zMatrix, fastAxis]);
 
   const vertCut = useMemo(() => {
     if (crossCol === null || !zMatrix) return null;
-    return { x: slowAxis, y: zMatrix.map(row => row[crossCol]) };
+    const y = zMatrix.map(row => row[crossCol]);
+    let mn = Infinity, mx = -Infinity;
+    for (const v of y) { if (v < mn) mn = v; if (v > mx) mx = v; }
+    return { x: slowAxis, y, yMin: mn, yMax: mx };
   }, [crossCol, zMatrix, slowAxis]);
 
   const isZoomed = viewport !== null;
+
+  // Axis ranges for cut plots — match the visible viewport so the crosshair aligns
+  const evp = viewport ?? { r0: 0, r1: nRows, c0: 0, c1: nCols };
+  const vertCutYRange: [number, number] = slowAxis.length > 0 ? [
+    slowAxis[Math.min(slowAxis.length - 1, Math.max(0, Math.ceil(evp.r1) - 1))],
+    slowAxis[Math.max(0, Math.min(slowAxis.length - 1, Math.floor(evp.r0)))],
+  ] : [nRows, 0]; // reversed: row 0 (first motor pos) at top
+  const horizCutXRange: [number, number] = fastAxis.length > 0 ? [
+    fastAxis[Math.max(0, Math.min(fastAxis.length - 1, Math.floor(evp.c0)))],
+    fastAxis[Math.min(fastAxis.length - 1, Math.max(0, Math.ceil(evp.c1) - 1))],
+  ] : [0, nCols];
 
   if (loading) return <div className="h-full flex items-center justify-center text-gray-400 text-sm">Loading…</div>;
   if (error) return <div className="h-full flex items-center justify-center text-red-400 text-sm">{error}</div>;
@@ -475,24 +504,28 @@ export default function GridScanPanel({ serverUrl, catalog, runId, dimensions, z
       <div ref={layoutRef} className="flex-1 min-h-0 flex flex-col select-none">
         {/* Top row */}
         <div className="flex min-h-0" style={{ height: `${rowSplit}%` }}>
-        {/* Heatmap */}
-        <div className="relative bg-gray-900 rounded overflow-hidden" ref={containerRef} style={{ width: `${colSplit}%` }}>
-          <canvas
-            ref={canvasRef}
-            className={`w-full h-full ${isZoomed ? 'cursor-grab active:cursor-grabbing' : 'cursor-crosshair'}`}
-            onMouseDown={handleMouseDown}
-            onMouseMove={handleMouseMove}
-            onMouseUp={handleMouseUp}
-            onMouseLeave={() => { dragRef.current = null; setSelBox(null); }}
-            onDoubleClick={handleDoubleClick}
-          />
-          {selBox && (
-            <div
-              className="absolute pointer-events-none border border-white/80 bg-white/10"
-              style={{ left: selBox.x, top: selBox.y, width: selBox.w, height: selBox.h,
-                       borderStyle: 'dashed', borderWidth: 1.5 }}
+        {/* Heatmap — outer div is full-size; inner div is inset to match PlotlyScatter margins */}
+        <div className="relative bg-white rounded overflow-hidden border border-gray-200" style={{ width: `${colSplit}%` }}>
+          <div ref={containerRef} className="absolute"
+               style={{ top: PLOT_T, bottom: PLOT_B, left: PLOT_L, right: PLOT_R }}>
+            <canvas
+              ref={canvasRef}
+              className={`w-full h-full ${isZoomed ? 'cursor-grab active:cursor-grabbing' : 'cursor-crosshair'}`}
+              onMouseDown={handleMouseDown}
+              onMouseMove={handleMouseMove}
+              onMouseUp={handleMouseUp}
+              onMouseLeave={() => { dragRef.current = null; setSelBox(null); }}
+              onDoubleClick={handleDoubleClick}
             />
-          )}
+            {selBox && (
+              <div
+                className="absolute pointer-events-none border border-white/80 bg-white/10"
+                style={{ left: selBox.x, top: selBox.y, width: selBox.w, height: selBox.h,
+                         borderStyle: 'dashed', borderWidth: 1.5 }}
+              />
+            )}
+          </div>
+          {/* Axis labels sit in the margin area of the outer div */}
           <div className="absolute bottom-0 left-0 right-0 text-center text-[10px] text-gray-300 pb-0.5 pointer-events-none">
             {fastMotor}
           </div>
@@ -512,9 +545,14 @@ export default function GridScanPanel({ serverUrl, catalog, runId, dimensions, z
             {vertCut ? (
               <>
                 <PlotlyScatter
-                  data={[{ x: vertCut.x, y: vertCut.y, type: 'scatter', mode: 'lines+markers', line: { color: '#0ea5e9' }, marker: { size: 4 } }]}
-                  xAxisTitle={slowMotor}
-                  yAxisTitle={effectiveZField}
+                  data={[
+                    { x: vertCut.y, y: vertCut.x, type: 'scatter', mode: 'lines+markers', line: { color: '#0ea5e9' }, marker: { size: 4 }, showlegend: false },
+                    { x: [globalZMin, globalZMax], y: [slowAxis[crossRow!], slowAxis[crossRow!]], type: 'scatter', mode: 'lines',
+                      line: { color: 'rgba(100,100,100,0.45)', dash: 'dash', width: 1 }, hoverinfo: 'skip' as const, showlegend: false },
+                  ]}
+                  xAxisTitle={effectiveZField}
+                  yAxisTitle={slowMotor}
+                  yAxisRange={vertCutYRange}
                   className="w-full h-full"
                 />
                 {onAnalyzeCut && (
@@ -546,9 +584,14 @@ export default function GridScanPanel({ serverUrl, catalog, runId, dimensions, z
             {horizCut ? (
               <>
                 <PlotlyScatter
-                  data={[{ x: horizCut.x, y: horizCut.y, type: 'scatter', mode: 'lines+markers', line: { color: '#10b981' }, marker: { size: 4 } }]}
+                  data={[
+                    { x: horizCut.x, y: horizCut.y, type: 'scatter', mode: 'lines+markers', line: { color: '#10b981' }, marker: { size: 4 }, showlegend: false },
+                    { x: [fastAxis[crossCol!], fastAxis[crossCol!]], y: [globalZMin, globalZMax], type: 'scatter', mode: 'lines',
+                      line: { color: 'rgba(100,100,100,0.45)', dash: 'dash', width: 1 }, hoverinfo: 'skip' as const, showlegend: false },
+                  ]}
                   xAxisTitle={fastMotor}
                   yAxisTitle={effectiveZField}
+                  xAxisRange={horizCutXRange}
                   className="w-full h-full"
                 />
                 {onAnalyzeCut && (
