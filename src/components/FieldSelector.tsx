@@ -271,7 +271,8 @@ const FieldSelector = forwardRef<FieldSelectorHandle, FieldSelectorProps>(functi
       const traces = await fetchAllTraces(x, ys);
       const title = ys.length === 1 ? `${ys[0]} vs ${x}` : `${ys.join(', ')} vs ${x}`;
       onPlot(traces, title);
-    } catch {
+    } catch (e) {
+      console.error('Plot failed:', e);
       setError('Failed to fetch data');
     } finally {
       setAdding(false);
