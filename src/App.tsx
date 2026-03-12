@@ -8,6 +8,7 @@ import RunMetadataTab from './components/RunMetadataTab';
 import RunSummaryTab from './components/RunSummaryTab';
 import QServerPanel from './components/QServerPanel';
 import GridScanPanel from './components/GridScanPanel';
+import GridScan1DPanel from './components/GridScan1DPanel';
 import ImagePanel from './components/ImagePanel';
 import type { Panel, XYTrace, TraceStyle } from './types';
 import { DEFAULT_TRACE_STYLE } from './constants';
@@ -175,6 +176,7 @@ export default function App() {
   const [selectedRunHintsDimensions, setSelectedRunHintsDimensions] = useState<string[][] | null>(null);
   const [gridZField, setGridZField] = useState('');
   const [showGridHeatmap, setShowGridHeatmap] = useState(false);
+  const [showGrid1D, setShowGrid1D] = useState(false);
   const [imageState, setImageState] = useState<{ fieldName: string; stream: string; dataSubNode: string; shape: number[] } | null>(null);
   const pendingGridHeatmapRef = useRef(false);
   const [runPage, setRunPage] = useState(0);
@@ -251,6 +253,7 @@ export default function App() {
     setSelectedRunHintsDimensions(null);
     setGridZField('');
     setShowGridHeatmap(false);
+    setShowGrid1D(false);
     setImageState(null);
     if (!selectedRunId || !serverUrl) return;
     const cs = catSeg(selectedCatalog);
@@ -277,6 +280,7 @@ export default function App() {
           pendingGridHeatmapRef.current = false;
           if (isGrid) {
             setShowGridHeatmap(true);
+            setShowGrid1D(false);
           } else {
             fieldSelectorRef.current?.scheduleImageOpen();
           }
@@ -496,6 +500,7 @@ export default function App() {
     if (isGridScanRef.current) {
       // For grid scans "Plot" shows the heatmap, not a 1D trace
       setShowGridHeatmap(true);
+      setShowGrid1D(false);
       return;
     }
     setPanel({ id: crypto.randomUUID(), type: 'xy' as const, traces, title });
@@ -1034,7 +1039,7 @@ export default function App() {
                     if (!acquiring) {
                       if (isSameRun) {
                         // useEffect won't fire (no id change) — decide immediately
-                        if (isGridScan) setShowGridHeatmap(true);
+                        if (isGridScan) { setShowGridHeatmap(true); setShowGrid1D(false); }
                         else fieldSelectorRef.current?.scheduleImageOpen();
                       } else {
                         // New run: metadata effect will decide after fetching
@@ -1078,6 +1083,8 @@ export default function App() {
                       onLivePlot={livePlot}
                       onRemoveRunTraces={removeRunTraces}
                       onZSelect={isGridScan ? setGridZField : undefined}
+                      onGridPlot={isGridScan ? () => { setShowGridHeatmap(true); setShowGrid1D(false); setCenterTab('graph'); } : undefined}
+                      onGrid1DPlot={isGridScan ? () => { setShowGrid1D(true); setShowGridHeatmap(false); setCenterTab('graph'); } : undefined}
                       onImageOpen={(fieldName, stream, dataSubNode, shape) => { setImageState({ fieldName, stream, dataSubNode, shape }); setPanel(null); setFitResults(null); setCenterTab('graph'); }}
                     />
                   </div>
@@ -1136,6 +1143,8 @@ export default function App() {
                 {centerTab === 'graph' && (
                   imageState ? (
                     <ImagePanel serverUrl={serverUrl} catalog={selectedCatalog} runId={selectedRunId} stream={imageState.stream} dataSubNode={imageState.dataSubNode} fieldName={imageState.fieldName} shape={imageState.shape} onClose={() => { setImageState(null); setPanel(null); setFitResults(null); }} onAnalyzeCut={(x, y, xLabel, yLabel, title) => { setImageState(null); setPanel({ id: crypto.randomUUID(), type: 'xy', traces: [{ x, y, xLabel, yLabel, runLabel: selectedRunLabel, runId: selectedRunId }], title }); setFitResults(null); setShowDerivative(false); }} />
+                  ) : showGrid1D && isGridScan ? (
+                    <GridScan1DPanel serverUrl={serverUrl} catalog={selectedCatalog} runId={selectedRunId} dimensions={selectedRunHintsDimensions!} zField={gridZField} runAcquiring={selectedRunAcquiring} onClose={() => setShowGrid1D(false)} />
                   ) : showGridHeatmap && isGridScan ? (
                     <GridScanPanel serverUrl={serverUrl} catalog={selectedCatalog} runId={selectedRunId} shape={selectedRunShape as [number, number] | null} dimensions={selectedRunHintsDimensions!} zField={gridZField} onClose={() => setShowGridHeatmap(false)} onAnalyzeCut={(x, y, xLabel, yLabel, title) => { setShowGridHeatmap(false); setPanel({ id: crypto.randomUUID(), type: 'xy', traces: [{ x, y, xLabel, yLabel, runLabel: selectedRunLabel, runId: selectedRunId }], title }); setFitResults(null); setShowDerivative(false); }} />
                   ) : panel ? (
@@ -1241,6 +1250,8 @@ export default function App() {
                 {centerTab === 'graph' && (
                   imageState ? (
                     <ImagePanel serverUrl={serverUrl} catalog={selectedCatalog} runId={selectedRunId} stream={imageState.stream} dataSubNode={imageState.dataSubNode} fieldName={imageState.fieldName} shape={imageState.shape} onClose={() => { setImageState(null); setPanel(null); setFitResults(null); }} onAnalyzeCut={(x, y, xLabel, yLabel, title) => { setImageState(null); setPanel({ id: crypto.randomUUID(), type: 'xy', traces: [{ x, y, xLabel, yLabel, runLabel: selectedRunLabel, runId: selectedRunId }], title }); setFitResults(null); setShowDerivative(false); }} />
+                  ) : showGrid1D && isGridScan ? (
+                    <GridScan1DPanel serverUrl={serverUrl} catalog={selectedCatalog} runId={selectedRunId} dimensions={selectedRunHintsDimensions!} zField={gridZField} runAcquiring={selectedRunAcquiring} onClose={() => setShowGrid1D(false)} />
                   ) : showGridHeatmap && isGridScan ? (
                     <GridScanPanel serverUrl={serverUrl} catalog={selectedCatalog} runId={selectedRunId} shape={selectedRunShape as [number, number] | null} dimensions={selectedRunHintsDimensions!} zField={gridZField} onClose={() => setShowGridHeatmap(false)} onAnalyzeCut={(x, y, xLabel, yLabel, title) => { setShowGridHeatmap(false); setPanel({ id: crypto.randomUUID(), type: 'xy', traces: [{ x, y, xLabel, yLabel, runLabel: selectedRunLabel, runId: selectedRunId }], title }); setFitResults(null); setShowDerivative(false); }} />
                   ) : panel ? (

@@ -75,7 +75,7 @@ async function resolveTableUrl(serverUrl: string, cs: string, runId: string): Pr
   return null;
 }
 
-async function fetchAllColumns(serverUrl: string, cs: string, runId: string): Promise<Record<string, number[]> | null> {
+export async function fetchAllColumns(serverUrl: string, cs: string, runId: string): Promise<Record<string, number[]> | null> {
   const source = await resolveTableUrl(serverUrl, cs, runId);
   if (!source) return null;
 

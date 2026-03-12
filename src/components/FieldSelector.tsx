@@ -20,6 +20,10 @@ type FieldSelectorProps = {
   onRemoveRunTraces?: (runId: string) => void;
   /** When provided, switches to single-select Z mode for heatmap field selection */
   onZSelect?: (field: string) => void;
+  /** Called when the user clicks "Plot grid" in z-mode */
+  onGridPlot?: () => void;
+  /** Called when the user clicks "Plot 1D" in z-mode */
+  onGrid1DPlot?: () => void;
   /** When provided, image fields (shape ≥ 2D) show a View button instead of X/Y controls */
   onImageOpen?: (fieldName: string, stream: string, dataSubNode: string, shape: number[]) => void;
 };
@@ -31,7 +35,7 @@ const catSeg = (c: string | null) => c ? `/${c}` : '';
 const FieldSelector = forwardRef<FieldSelectorHandle, FieldSelectorProps>(function FieldSelector({
   serverUrl, catalog, runId, runLabel,
   runDetectors, runMotors, runAcquiring,
-  onPlot, onAddTraces, onLivePlot, onRemoveRunTraces, onZSelect, onImageOpen,
+  onPlot, onAddTraces, onLivePlot, onRemoveRunTraces, onZSelect, onGridPlot, onGrid1DPlot, onImageOpen,
 }, ref) {
   const zMode = !!onZSelect;
   // A field is a 2D image if it has ≥2 shape dimensions with the last two both > 1
@@ -422,7 +426,20 @@ const FieldSelector = forwardRef<FieldSelectorHandle, FieldSelectorProps>(functi
           >
             {streams.map(s => <option key={s} value={s}>{s}</option>)}
           </select>
-          {!zMode && (
+          {zMode ? (
+            <div className="ml-auto flex items-center gap-1">
+              <button
+                onClick={onGridPlot}
+                disabled={yFields.length === 0}
+                className="px-2 py-0.5 text-xs bg-sky-600 text-white rounded hover:bg-sky-500 disabled:opacity-40 disabled:cursor-not-allowed font-medium"
+              >Plot grid</button>
+              <button
+                onClick={onGrid1DPlot}
+                disabled={yFields.length === 0}
+                className="px-2 py-0.5 text-xs bg-sky-600 text-white rounded hover:bg-sky-500 disabled:opacity-40 disabled:cursor-not-allowed font-medium"
+              >Plot 1D</button>
+            </div>
+          ) : (
             <div className="ml-auto flex items-center gap-1">
               {onImageOpen && imageYField ? (
                 <button
