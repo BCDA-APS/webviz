@@ -1,5 +1,6 @@
 import { useState, useEffect, useRef, useMemo, useCallback } from 'react';
 import { PlotlyScatter } from '@blueskyproject/finch';
+import { type RGB, COLORMAPS, interpolateColor } from '../utils/colormap';
 
 // PlotlyScatter internal margins (from finch source) — keep in sync to align canvas with plots
 // l=60 (y-title present), r=30, t=30, b=70 + pb-4 wrapper (16px) = 86
@@ -17,33 +18,12 @@ type Props = {
   onAnalyzeCut?: (x: number[], y: number[], xLabel: string, yLabel: string, title: string) => void;
 };
 
-type RGB = [number, number, number];
 type Viewport = { r0: number; r1: number; c0: number; c1: number };
 type DragState =
   | { mode: 'pan';    sx: number; sy: number; svp: Viewport; moved: boolean }
   | { mode: 'select'; sx: number; sy: number; cRect: DOMRect; moved: boolean };
 
 const catSeg = (c: string | null) => c ? `/${c}` : '';
-
-const COLORMAPS: Record<string, RGB[]> = {
-  viridis:  [[68,1,84],[72,36,117],[64,67,135],[52,94,141],[41,120,142],[32,144,140],[34,167,132],[68,190,112],[121,209,81],[189,222,38],[253,231,37]],
-  plasma:   [[12,7,134],[87,0,165],[143,13,163],[188,54,134],[219,96,97],[244,140,56],[254,191,33],[240,249,33]],
-  inferno:  [[0,0,3],[40,11,84],[101,21,110],[159,42,99],[212,72,66],[245,125,21],[252,191,73],[252,255,164]],
-  magma:    [[0,0,3],[28,16,68],[79,18,123],[129,37,129],[181,54,122],[229,80,100],[251,135,97],[254,212,148],[252,253,191]],
-  hot:      [[0,0,0],[128,0,0],[255,0,0],[255,128,0],[255,255,0],[255,255,255]],
-  greys:    [[0,0,0],[255,255,255]],
-  rdbu:     [[33,102,172],[103,169,207],[209,229,240],[255,255,255],[253,219,199],[239,138,98],[178,24,43]],
-  turbo:    [[48,18,59],[70,96,209],[20,175,252],[54,227,153],[194,243,22],[249,168,26],[215,67,9],[122,4,3]],
-};
-
-function interpolateColor(palette: RGB[], t: number): RGB {
-  const clamped = Math.max(0, Math.min(1, t));
-  const idx = clamped * (palette.length - 1);
-  const lo = Math.floor(idx);
-  const hi = Math.min(palette.length - 1, Math.ceil(idx));
-  const frac = idx - lo;
-  return [0, 1, 2].map(i => Math.round(palette[lo][i] + frac * (palette[hi][i] - palette[lo][i]))) as RGB;
-}
 
 function drawFrame(
   canvas: HTMLCanvasElement,

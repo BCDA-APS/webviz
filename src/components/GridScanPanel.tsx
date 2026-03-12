@@ -1,5 +1,7 @@
 import { useState, useEffect, useRef, useMemo, useCallback } from 'react';
 import { PlotlyScatter } from '@blueskyproject/finch';
+import { type RGB, COLORMAPS, interpolateColor } from '../utils/colormap';
+import { buildZMatrix, matrixRange } from '../utils/scanUtils';
 
 // PlotlyScatter internal margins (from finch source) — keep in sync to align canvas with plots
 // l=60 (y-title present), r=30, t=30, b=70 + pb-4 wrapper (16px) = 86
@@ -22,28 +24,6 @@ type DragState =
   | { mode: 'select'; sx: number; sy: number; cRect: DOMRect; moved: boolean };
 
 const catSeg = (c: string | null) => c ? `/${c}` : '';
-
-type RGB = [number, number, number];
-
-const COLORMAPS: Record<string, RGB[]> = {
-  viridis:  [[68,1,84],[72,36,117],[64,67,135],[52,94,141],[41,120,142],[32,144,140],[34,167,132],[68,190,112],[121,209,81],[189,222,38],[253,231,37]],
-  plasma:   [[12,7,134],[87,0,165],[143,13,163],[188,54,134],[219,96,97],[244,140,56],[254,191,33],[240,249,33]],
-  inferno:  [[0,0,3],[40,11,84],[101,21,110],[159,42,99],[212,72,66],[245,125,21],[252,191,73],[252,255,164]],
-  magma:    [[0,0,3],[28,16,68],[79,18,123],[129,37,129],[181,54,122],[229,80,100],[251,135,97],[254,212,148],[252,253,191]],
-  hot:      [[0,0,0],[128,0,0],[255,0,0],[255,128,0],[255,255,0],[255,255,255]],
-  greys:    [[0,0,0],[255,255,255]],
-  rdbu:     [[33,102,172],[103,169,207],[209,229,240],[255,255,255],[253,219,199],[239,138,98],[178,24,43]],
-  turbo:    [[48,18,59],[70,96,209],[20,175,252],[54,227,153],[194,243,22],[249,168,26],[215,67,9],[122,4,3]],
-};
-
-function interpolateColor(palette: RGB[], t: number): RGB {
-  const clamped = Math.max(0, Math.min(1, t));
-  const idx = clamped * (palette.length - 1);
-  const lo = Math.floor(idx);
-  const hi = Math.min(palette.length - 1, Math.ceil(idx));
-  const frac = idx - lo;
-  return [0, 1, 2].map(i => Math.round(palette[lo][i] + frac * (palette[hi][i] - palette[lo][i]))) as RGB;
-}
 
 // Mirrors RunDataTab.resolveTableSource: finds the correct table/full URL for the primary stream.
 async function resolveTableUrl(serverUrl: string, cs: string, runId: string): Promise<{ tableUrl: string; arrayBase: string | null; columns?: string[] } | null> {
@@ -235,29 +215,12 @@ export default function GridScanPanel({ serverUrl, catalog, runId, dimensions, z
   const { zMatrix, slowAxis, fastAxis } = useMemo<{
     zMatrix: number[][] | null; slowAxis: number[]; fastAxis: number[];
   }>(() => {
-    if (!allData || !effectiveZField || !allData[effectiveZField] || !slowMotor || !fastMotor ||
-        !allData[slowMotor] || !allData[fastMotor]) {
+    if (!allData || !effectiveZField || !slowMotor || !fastMotor) {
       return { zMatrix: null, slowAxis: [], fastAxis: [] };
     }
-    const zFlat = allData[effectiveZField];
-    const m1Flat = allData[slowMotor];
-    const m2Flat = allData[fastMotor];
-    const n = zFlat.length;
-    const PREC = 1e6;
-    const round = (v: number) => Math.round(v * PREC);
-    const m1Unique = [...new Set(m1Flat.map(round))].sort((a, b) => a - b);
-    const m2Unique = [...new Set(m2Flat.map(round))].sort((a, b) => a - b);
-    const m1Idx = new Map(m1Unique.map((v, i) => [v, i]));
-    const m2Idx = new Map(m2Unique.map((v, i) => [v, i]));
-    const nR = m1Unique.length;
-    const nC = m2Unique.length;
-    const rows: number[][] = Array.from({ length: nR }, () => new Array(nC).fill(NaN));
-    for (let k = 0; k < n; k++) {
-      const ri = m1Idx.get(round(m1Flat[k]));
-      const ci = m2Idx.get(round(m2Flat[k]));
-      if (ri !== undefined && ci !== undefined) rows[ri][ci] = zFlat[k];
-    }
-    return { zMatrix: rows, slowAxis: m1Unique.map(v => v / PREC), fastAxis: m2Unique.map(v => v / PREC) };
+    const result = buildZMatrix(allData, effectiveZField, slowMotor, fastMotor);
+    if (!result) return { zMatrix: null, slowAxis: [], fastAxis: [] };
+    return result;
   }, [allData, effectiveZField, slowMotor, fastMotor]);
 
   const nRows = zMatrix?.length ?? 0;
@@ -266,9 +229,8 @@ export default function GridScanPanel({ serverUrl, catalog, runId, dimensions, z
   // Global z range for crosshair line spans (so lines are always full-height/full-width)
   const { globalZMin, globalZMax } = useMemo(() => {
     if (!zMatrix) return { globalZMin: 0, globalZMax: 1 };
-    let mn = Infinity, mx = -Infinity;
-    for (const row of zMatrix) for (const v of row) { if (isFinite(v) && v < mn) mn = v; if (isFinite(v) && v > mx) mx = v; }
-    return { globalZMin: mn, globalZMax: mx };
+    const { min, max } = matrixRange(zMatrix);
+    return { globalZMin: min, globalZMax: max };
   }, [zMatrix]);
 
   // Keep vpRef in sync with current effective viewport
