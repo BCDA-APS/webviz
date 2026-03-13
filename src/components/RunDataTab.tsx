@@ -84,6 +84,19 @@ export default function RunDataTab({ serverUrl, catalog, runId }: Props) {
   const [data, setData] = useState<Record<string, unknown[]>>({});
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState('');
+  const [scanId, setScanId] = useState<number | null>(null);
+
+  useEffect(() => {
+    setScanId(null);
+    if (!serverUrl || !runId) return;
+    fetch(`${serverUrl}/api/v1/metadata${catSeg(catalog)}/${runId}`)
+      .then(r => r.ok ? r.json() : null)
+      .then(j => {
+        const id = j?.data?.attributes?.metadata?.start?.scan_id;
+        if (typeof id === 'number') setScanId(id);
+      })
+      .catch(() => {});
+  }, [serverUrl, catalog, runId]);
 
   // Fetch available streams for the run
   useEffect(() => {
@@ -152,22 +165,29 @@ export default function RunDataTab({ serverUrl, catalog, runId }: Props) {
 
   const columns = Object.keys(data);
   const nRows = columns.length > 0 ? (data[columns[0]] as unknown[]).length : 0;
+  const sortKey = ['seq_num', 'time'].find(k => columns.includes(k));
+  const rowOrder = sortKey
+    ? Array.from({ length: nRows }, (_, i) => i)
+        .sort((a, b) => (data[sortKey] as number[])[a] - (data[sortKey] as number[])[b])
+    : Array.from({ length: nRows }, (_, i) => i);
   const thCls = 'sticky top-0 z-10 px-3 py-1.5 text-left text-xs font-semibold text-gray-500 uppercase tracking-wide bg-gray-50 border-b border-gray-200 whitespace-nowrap';
   const tdCls = 'px-3 py-1 text-xs text-gray-700 border-b border-gray-100 whitespace-nowrap font-mono';
 
   const handleExportCsv = () => {
     const header = columns.join(',');
-    const rows = Array.from({ length: nRows }, (_, i) =>
+    const rows = rowOrder.map(i =>
       columns.map(col => {
         const v = (data[col] as unknown[])[i];
-        const s = String(v ?? '');
+        const s = col === 'time' && typeof v === 'number'
+          ? new Date(v * 1000).toLocaleString(undefined, { timeZoneName: 'short' })
+          : String(v ?? '');
         return s.includes(',') || s.includes('"') || s.includes('\n') ? `"${s.replace(/"/g, '""')}"` : s;
       }).join(',')
     );
     const csv = [header, ...rows].join('\n');
     const a = document.createElement('a');
     a.href = URL.createObjectURL(new Blob([csv], { type: 'text/csv' }));
-    a.download = `${runId}_${activeStream}.csv`;
+    a.download = `${scanId != null ? `scan${scanId}_` : ''}${runId.slice(0, 8)}_${activeStream}.csv`;
     a.click();
     URL.revokeObjectURL(a.href);
   };
@@ -225,14 +245,16 @@ export default function RunDataTab({ serverUrl, catalog, runId }: Props) {
                 </tr>
               </thead>
               <tbody>
-                {Array.from({ length: nRows }, (_, i) => (
-                  <tr key={i} className={i % 2 === 0 ? 'bg-white' : 'bg-gray-50'}>
+                {rowOrder.map((ri, i) => (
+                  <tr key={ri} className={i % 2 === 0 ? 'bg-white' : 'bg-gray-50'}>
                     <td className={`${tdCls} text-gray-400`}>{i + 1}</td>
                     {columns.map(col => {
-                      const v = (data[col] as unknown[])[i];
-                      const display = typeof v === 'number'
-                        ? (Number.isInteger(v) ? String(v) : v.toPrecision(6))
-                        : String(v ?? '');
+                      const v = (data[col] as unknown[])[ri];
+                      const display = col === 'time' && typeof v === 'number'
+                        ? new Date(v * 1000).toLocaleString(undefined, { timeZoneName: 'short' })
+                        : typeof v === 'number'
+                          ? (Number.isInteger(v) ? String(v) : v.toPrecision(6))
+                          : String(v ?? '');
                       return <td key={col} className={tdCls}>{display}</td>;
                     })}
                   </tr>
