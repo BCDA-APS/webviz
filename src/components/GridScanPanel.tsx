@@ -6,6 +6,7 @@ import { buildZMatrix, matrixRange } from '../utils/scanUtils';
 // PlotlyScatter internal margins (from finch source) — keep in sync to align canvas with plots
 // l=60 (y-title present), r=30, t=30, b=70 + pb-4 wrapper (16px) = 86
 const PLOT_T = 30, PLOT_B = 86, PLOT_L = 60, PLOT_R = 30;
+const TITLE_FONT = { size: 12, color: '#7f7f7f' };
 
 type Props = {
   serverUrl: string;
@@ -109,6 +110,82 @@ export async function fetchAllColumns(serverUrl: string, cs: string, runId: stri
   return null;
 }
 
+function formatTick(v: number): string {
+  if (v === 0) return '0';
+  const abs = Math.abs(v);
+  if (abs >= 10000 || abs < 0.001) return v.toExponential(2);
+  return parseFloat(v.toPrecision(4)).toString();
+}
+
+function drawTicks(
+  canvas: HTMLCanvasElement,
+  slowAxis: number[],
+  fastAxis: number[],
+  vp: Viewport | null,
+  nRows: number,
+  nCols: number,
+  colorFn?: (t: number) => RGB,
+  zMin?: number,
+  zMax?: number,
+) {
+  const dpr = window.devicePixelRatio || 1;
+  // CSS pixel dimensions (canvas.width is physical pixels = CSS × dpr)
+  const w = canvas.width / dpr;
+  const h = canvas.height / dpr;
+  const ctx = canvas.getContext('2d');
+  if (!ctx) return;
+  ctx.clearRect(0, 0, canvas.width, canvas.height);
+  const plotW = w - PLOT_L - PLOT_R;
+  const plotH = h - PLOT_T - PLOT_B;
+  if (plotW <= 0 || plotH <= 0 || fastAxis.length === 0 || slowAxis.length === 0) return;
+  const evp = vp ?? { r0: 0, r1: nRows, c0: 0, c1: nCols };
+  ctx.save();
+  ctx.scale(dpr, dpr); // draw in CSS pixel coordinates for crisp text
+  ctx.fillStyle = '#4b5563';   // gray-600
+  ctx.strokeStyle = '#9ca3af'; // gray-400
+  ctx.font = '12px system-ui, sans-serif';
+  ctx.lineWidth = 1;
+  const N = 5;
+  for (let i = 0; i <= N; i++) {
+    const frac = i / N;
+    // X tick
+    const ci = Math.max(0, Math.min(fastAxis.length - 1, Math.round(evp.c0 + frac * (evp.c1 - evp.c0))));
+    const px = PLOT_L + frac * plotW;
+    ctx.beginPath(); ctx.moveTo(px, h - PLOT_B); ctx.lineTo(px, h - PLOT_B + 5); ctx.stroke();
+    ctx.textAlign = 'center';
+    ctx.fillText(formatTick(fastAxis[ci]), px, h - PLOT_B + 16);
+    // Y tick (flipped: top = high row index = high motor value)
+    const ri = Math.max(0, Math.min(slowAxis.length - 1, Math.round(evp.r1 - frac * (evp.r1 - evp.r0))));
+    const py = PLOT_T + frac * plotH;
+    ctx.beginPath(); ctx.moveTo(PLOT_L, py); ctx.lineTo(PLOT_L - 5, py); ctx.stroke();
+    ctx.textAlign = 'right';
+    ctx.fillText(formatTick(slowAxis[ri]), PLOT_L - 7, py + 3.5);
+  }
+  // Colorbar in bottom margin (below x-axis tick labels)
+  if (colorFn && zMin !== undefined && zMax !== undefined && plotW > 0) {
+    const barY = h - PLOT_B + 40, barH = 13;
+    for (let px = 0; px < Math.ceil(plotW); px++) {
+      const [r, g, b] = colorFn(px / (plotW - 1));
+      ctx.fillStyle = `rgb(${r},${g},${b})`;
+      ctx.fillRect(PLOT_L + px, barY, 1, barH);
+    }
+    ctx.strokeStyle = '#d1d5db'; ctx.lineWidth = 0.5;
+    ctx.strokeRect(PLOT_L, barY, plotW, barH);
+    ctx.strokeStyle = '#9ca3af'; ctx.lineWidth = 1;
+    ctx.fillStyle = '#4b5563';
+    const NB = 5;
+    for (let i = 0; i <= NB; i++) {
+      const frac = i / NB;
+      const px = PLOT_L + frac * plotW;
+      ctx.beginPath(); ctx.moveTo(px, barY + barH); ctx.lineTo(px, barY + barH + 3); ctx.stroke();
+      ctx.textAlign = i === 0 ? 'left' : i === NB ? 'right' : 'center';
+      ctx.fillText(formatTick(zMin + frac * (zMax - zMin)), px, barY + barH + 14);
+    }
+  }
+  ctx.restore();
+}
+
+
 // Backward-mapping render: for each canvas pixel, look up the grid cell it belongs to.
 // This naturally handles any zoom viewport without extra logic.
 function drawHeatmap(
@@ -143,7 +220,7 @@ function drawHeatmap(
   const data = imageData.data;
 
   for (let py = 0; py < h; py++) {
-    const row = Math.max(0, Math.min(nRows - 1, Math.floor(r0 + (py / h) * rowSpan)));
+    const row = Math.max(0, Math.min(nRows - 1, Math.floor(r1 - (py / h) * rowSpan)));
     for (let px = 0; px < w; px++) {
       const col = Math.max(0, Math.min(nCols - 1, Math.floor(c0 + (px / w) * colSpan)));
       const v = zMatrix[row][col];
@@ -157,7 +234,7 @@ function drawHeatmap(
 
   if (crossRow !== null && crossCol !== null) {
     const cx = ((crossCol + 0.5 - c0) / colSpan) * w;
-    const cy = ((crossRow + 0.5 - r0) / rowSpan) * h;
+    const cy = ((r1 - crossRow - 0.5) / rowSpan) * h;
     ctx.strokeStyle = 'rgba(255,255,255,0.85)';
     ctx.lineWidth = 1.5;
     if (cy >= 0 && cy <= h) { ctx.beginPath(); ctx.moveTo(0, cy); ctx.lineTo(w, cy); ctx.stroke(); }
@@ -165,7 +242,7 @@ function drawHeatmap(
   }
 }
 
-export default function GridScanPanel({ serverUrl, catalog, runId, dimensions, zField, onClose, onAnalyzeCut }: Props) {
+export default function GridScanPanel({ serverUrl, catalog, runId, shape, dimensions, zField, onClose, onAnalyzeCut }: Props) {
   const slowMotor = dimensions[0]?.[0] ?? '';
   const fastMotor = dimensions[1]?.[0] ?? '';
 
@@ -184,6 +261,7 @@ export default function GridScanPanel({ serverUrl, catalog, runId, dimensions, z
   const layoutRef = useRef<HTMLDivElement>(null);
   const dragRef = useRef<DragState | null>(null);
   const splitDragRef = useRef<'col' | 'row' | null>(null);
+  const ticksCanvasRef = useRef<HTMLCanvasElement>(null);
   // always-current viewport for use in imperative event handlers
   const vpRef = useRef<Viewport>({ r0: 0, r1: 1, c0: 0, c1: 1 });
 
@@ -218,7 +296,7 @@ export default function GridScanPanel({ serverUrl, catalog, runId, dimensions, z
     if (!allData || !effectiveZField || !slowMotor || !fastMotor) {
       return { zMatrix: null, slowAxis: [], fastAxis: [] };
     }
-    const result = buildZMatrix(allData, effectiveZField, slowMotor, fastMotor);
+    const result = buildZMatrix(allData, effectiveZField, slowMotor, fastMotor, shape);
     if (!result) return { zMatrix: null, slowAxis: [], fastAxis: [] };
     return result;
   }, [allData, effectiveZField, slowMotor, fastMotor]);
@@ -246,8 +324,11 @@ export default function GridScanPanel({ serverUrl, catalog, runId, dimensions, z
     const canvas = canvasRef.current;
     if (!canvas || !zMatrix) return;
     const palette = COLORMAPS[colormap] ?? COLORMAPS.viridis;
-    drawHeatmap(canvas, zMatrix, crossRow, crossCol, vpRef.current, t => interpolateColor(palette, t));
-  }, [zMatrix, crossRow, crossCol, viewport, colormap]);
+    const colorFn = (t: number) => interpolateColor(palette, t);
+    drawHeatmap(canvas, zMatrix, crossRow, crossCol, vpRef.current, colorFn);
+    const tc = ticksCanvasRef.current;
+    if (tc) drawTicks(tc, slowAxis, fastAxis, viewport, nRows, nCols, colorFn, globalZMin, globalZMax);
+  }, [zMatrix, crossRow, crossCol, viewport, colormap, slowAxis, fastAxis, nRows, nCols, globalZMin, globalZMax]);
 
   // Split drag (col/row dividers)
   useEffect(() => {
@@ -278,14 +359,22 @@ export default function GridScanPanel({ serverUrl, catalog, runId, dimensions, z
     const obs = new ResizeObserver(() => {
       canvas.width = container.clientWidth;
       canvas.height = container.clientHeight;
+      const tc = ticksCanvasRef.current;
+      if (tc) {
+        const dpr = window.devicePixelRatio || 1;
+        tc.width = (container.clientWidth + PLOT_L + PLOT_R) * dpr;
+        tc.height = (container.clientHeight + PLOT_T + PLOT_B) * dpr;
+      }
       if (zMatrix) {
         const palette = COLORMAPS[colormap] ?? COLORMAPS.viridis;
-        drawHeatmap(canvas, zMatrix, crossRow, crossCol, vpRef.current, t => interpolateColor(palette, t));
+        const colorFn = (t: number) => interpolateColor(palette, t);
+        drawHeatmap(canvas, zMatrix, crossRow, crossCol, vpRef.current, colorFn);
+        if (tc) drawTicks(tc, slowAxis, fastAxis, viewport, nRows, nCols, colorFn, globalZMin, globalZMax);
       }
     });
     obs.observe(container);
     return () => obs.disconnect();
-  }, [zMatrix, crossRow, crossCol, colormap]); // eslint-disable-line react-hooks/exhaustive-deps
+  }, [zMatrix, crossRow, crossCol, colormap, slowAxis, fastAxis, viewport, nRows, nCols, globalZMin, globalZMax]); // eslint-disable-line react-hooks/exhaustive-deps
 
   // Wheel zoom (must be non-passive to call preventDefault)
   useEffect(() => {
@@ -299,12 +388,12 @@ export default function GridScanPanel({ serverUrl, catalog, runId, dimensions, z
       const fy = (e.clientY - rect.top) / rect.height;
       const vp = vpRef.current;
       const factor = e.deltaY > 0 ? 1.2 : 1 / 1.2;
-      const rowC = vp.r0 + fy * (vp.r1 - vp.r0);
+      const rowC = vp.r1 - fy * (vp.r1 - vp.r0); // flipped y
       const colC = vp.c0 + fx * (vp.c1 - vp.c0);
       const newRowSpan = (vp.r1 - vp.r0) * factor;
       const newColSpan = (vp.c1 - vp.c0) * factor;
-      const r0 = Math.max(0, rowC - fy * newRowSpan);
-      const r1 = Math.min(nRows, rowC + (1 - fy) * newRowSpan);
+      const r0 = Math.max(0, rowC - (1 - fy) * newRowSpan); // flipped y
+      const r1 = Math.min(nRows, rowC + fy * newRowSpan);   // flipped y
       const c0 = Math.max(0, colC - fx * newColSpan);
       const c1 = Math.min(nCols, colC + (1 - fx) * newColSpan);
       // Don't zoom out beyond full grid
@@ -344,7 +433,7 @@ export default function GridScanPanel({ serverUrl, catalog, runId, dimensions, z
       const canvas = canvasRef.current;
       if (!canvas) return;
       const { svp } = drag;
-      const dr = -(dy / canvas.clientHeight) * (svp.r1 - svp.r0);
+      const dr = (dy / canvas.clientHeight) * (svp.r1 - svp.r0); // flipped y: positive when dragging down
       const dc = -(dx / canvas.clientWidth)  * (svp.c1 - svp.c0);
       const rowSpan = svp.r1 - svp.r0;
       const colSpan = svp.c1 - svp.c0;
@@ -372,7 +461,7 @@ export default function GridScanPanel({ serverUrl, catalog, runId, dimensions, z
       const rowSpan = vp.r1 - vp.r0;
       const colSpan = vp.c1 - vp.c0;
       setViewport({
-        r0: vp.r0 + fy0 * rowSpan, r1: vp.r0 + fy1 * rowSpan,
+        r0: vp.r1 - fy1 * rowSpan, r1: vp.r1 - fy0 * rowSpan, // flipped y
         c0: vp.c0 + fx0 * colSpan, c1: vp.c0 + fx1 * colSpan,
       });
       return;
@@ -384,8 +473,8 @@ export default function GridScanPanel({ serverUrl, catalog, runId, dimensions, z
       if (!canvas) return;
       const rect = canvas.getBoundingClientRect();
       const vp = vpRef.current;
-      const col = Math.floor(vp.c0 + ((e.clientX - rect.left) / rect.width)  * (vp.c1 - vp.c0));
-      const row = Math.floor(vp.r0 + ((e.clientY - rect.top)  / rect.height) * (vp.r1 - vp.r0));
+      const col = Math.floor(vp.c0 + ((e.clientX - rect.left) / rect.width) * (vp.c1 - vp.c0));
+      const row = Math.floor(vp.r1 - ((e.clientY - rect.top)  / rect.height) * (vp.r1 - vp.r0)); // flipped y
       setCrossRow(Math.max(0, Math.min(nRows - 1, row)));
       setCrossCol(Math.max(0, Math.min(nCols - 1, col)));
     }
@@ -414,9 +503,9 @@ export default function GridScanPanel({ serverUrl, catalog, runId, dimensions, z
   // Axis ranges for cut plots — match the visible viewport so the crosshair aligns
   const evp = viewport ?? { r0: 0, r1: nRows, c0: 0, c1: nCols };
   const vertCutYRange: [number, number] = slowAxis.length > 0 ? [
-    slowAxis[Math.min(slowAxis.length - 1, Math.max(0, Math.ceil(evp.r1) - 1))],
     slowAxis[Math.max(0, Math.min(slowAxis.length - 1, Math.floor(evp.r0)))],
-  ] : [nRows, 0]; // reversed: row 0 (first motor pos) at top
+    slowAxis[Math.min(slowAxis.length - 1, Math.max(0, Math.ceil(evp.r1) - 1))],
+  ] : [0, nRows]; // standard: low at bottom, high at top
   const horizCutXRange: [number, number] = fastAxis.length > 0 ? [
     fastAxis[Math.max(0, Math.min(fastAxis.length - 1, Math.floor(evp.c0)))],
     fastAxis[Math.min(fastAxis.length - 1, Math.max(0, Math.ceil(evp.c1) - 1))],
@@ -487,12 +576,14 @@ export default function GridScanPanel({ serverUrl, catalog, runId, dimensions, z
               />
             )}
           </div>
-          {/* Axis labels sit in the margin area of the outer div */}
-          <div className="absolute bottom-0 left-0 right-0 text-center text-[10px] text-gray-300 pb-0.5 pointer-events-none">
+          {/* Ticks overlay — covers full outer div including margins */}
+          <canvas ref={ticksCanvasRef} className="absolute inset-0 w-full h-full pointer-events-none" />
+          {/* Axis title labels */}
+          <div className="absolute top-0 left-0 right-0 text-center text-[12px] font-medium text-gray-500 pt-1 pointer-events-none">
             {fastMotor}
           </div>
-          <div className="absolute top-0 bottom-0 left-0 flex items-center text-[10px] text-gray-300 pl-0.5 pointer-events-none" style={{ writingMode: 'vertical-rl', transform: 'rotate(180deg)' }}>
-            {slowMotor}
+          <div className="absolute top-0 bottom-0 left-0 flex items-center justify-center pointer-events-none" style={{ width: PLOT_L }}>
+            <span className="text-[12px] font-medium text-gray-500 whitespace-nowrap" style={{ transform: 'translateX(-10px) rotate(-90deg)' }}>{slowMotor}</span>
           </div>
         </div>
 
@@ -515,6 +606,8 @@ export default function GridScanPanel({ serverUrl, catalog, runId, dimensions, z
                   xAxisTitle={effectiveZField}
                   yAxisTitle={slowMotor}
                   yAxisRange={vertCutYRange}
+                  xAxisLayout={{ side: 'top', title: { text: effectiveZField, font: TITLE_FONT } }}
+                  yAxisLayout={{ title: { text: slowMotor, font: TITLE_FONT } }}
                   className="w-full h-full"
                 />
                 {onAnalyzeCut && (
@@ -554,6 +647,8 @@ export default function GridScanPanel({ serverUrl, catalog, runId, dimensions, z
                   xAxisTitle={fastMotor}
                   yAxisTitle={effectiveZField}
                   xAxisRange={horizCutXRange}
+                  xAxisLayout={{ title: { text: fastMotor, font: TITLE_FONT } }}
+                  yAxisLayout={{ title: { text: effectiveZField, font: TITLE_FONT } }}
                   className="w-full h-full"
                 />
                 {onAnalyzeCut && (
@@ -574,14 +669,14 @@ export default function GridScanPanel({ serverUrl, catalog, runId, dimensions, z
           {/* Spacer aligned with column handle */}
           <div className="w-1.5 shrink-0 mx-0.5" />
 
-          {/* Info */}
+          {/* Info + colorbar */}
           <div className="bg-gray-50 rounded border border-gray-200 flex-1 flex items-center justify-center">
-            <div className="text-xs text-gray-400 text-center px-3">
+            <div className="flex flex-col items-center gap-2 text-xs text-gray-400 px-3">
               <p className="font-medium text-gray-500">{runId.slice(0, 8)}…</p>
-              <p className="mt-1">{nRows} rows × {nCols} cols</p>
+              <p>{nRows} × {nCols}</p>
               {zMatrix && (
-                <p className="mt-1 font-mono">
-                  z: [{Math.min(...zMatrix.flat().filter(isFinite)).toPrecision(4)}, {Math.max(...zMatrix.flat().filter(isFinite)).toPrecision(4)}]
+                <p className="font-mono text-[10px] text-gray-500 text-center">
+                  [{formatTick(globalZMin)}, {formatTick(globalZMax)}]
                 </p>
               )}
             </div>
