@@ -1,25 +1,25 @@
-# webviz
+# Kestrel
 
 A browser-based visualization tool for [Tiled](https://blueskyproject.io/tiled/) datasets.
 
 | CI/CD | Coverage | Documentation | License |
 |-------|----------|---------------|---------|
-| [![CI](https://github.com/BCDA-APS/webviz/actions/workflows/ci.yml/badge.svg)](https://github.com/BCDA-APS/webviz/actions/workflows/ci.yml) | [![codecov](https://codecov.io/gh/BCDA-APS/webviz/branch/main/graph/badge.svg)](https://codecov.io/gh/BCDA-APS/webviz) | [![docs](https://img.shields.io/badge/docs-GitHub%20Pages-blue)](https://bcda-aps.github.io/webviz/) | [![License](https://img.shields.io/badge/License-ANL-blue)](LICENSE) |
+| [![CI](https://github.com/BCDA-APS/kestrel/actions/workflows/ci.yml/badge.svg)](https://github.com/BCDA-APS/kestrel/actions/workflows/ci.yml) | [![codecov](https://codecov.io/gh/BCDA-APS/kestrel/branch/main/graph/badge.svg)](https://codecov.io/gh/BCDA-APS/kestrel) | [![docs](https://img.shields.io/badge/docs-GitHub%20Pages-blue)](https://bcda-aps.github.io/kestrel/) | [![License](https://img.shields.io/badge/License-ANL-blue)](LICENSE) |
 
 ## Installation
 
 ### 1. Create a conda environment with Node.js
 
 ```bash
-conda create -n webviz nodejs
-conda activate webviz
+conda create -n kestrel nodejs
+conda activate kestrel
 ```
 
 ### 2. Clone and install dependencies
 
 ```bash
-git clone https://github.com/BCDA-APS/webviz.git
-cd webviz
+git clone https://github.com/BCDA-APS/kestrel.git
+cd kestrel
 npm install
 ```
 
