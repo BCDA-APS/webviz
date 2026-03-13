@@ -702,7 +702,7 @@ export default function App() {
         /* ── Split mode header: two sections aligned with body panels ── */
         <header className="flex-none h-12 bg-sky-950 flex shadow-md z-10">
           {/* Visualizer section */}
-          <div className="flex flex-1 items-center gap-2 px-3 min-w-0 overflow-hidden">
+          <div className="flex flex-1 items-center gap-2 px-3 min-w-0">
             <button
               onClick={() => setSplitView(v => !v)}
               title="Exit split view"
@@ -757,7 +757,7 @@ export default function App() {
           {/* Divider */}
           <div className="flex-none w-1 bg-sky-800" />
           {/* QServer section */}
-          <div className="flex flex-none items-center gap-2 px-3 overflow-hidden" style={{ width: splitQsWidth }}>
+          <div className="flex flex-none items-center gap-2 px-3" style={{ width: splitQsWidth }}>
             {qsStatus && (
               <>
                 <button onClick={handleQsEnvToggle} className={`shrink-0 text-xs px-2 py-1.5 rounded font-medium transition-colors ${qsStatus.worker_environment_exists ? 'bg-red-400 hover:bg-red-300 text-white' : 'bg-emerald-600 hover:bg-emerald-500 text-white'}`}>
