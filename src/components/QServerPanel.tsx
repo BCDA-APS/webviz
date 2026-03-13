@@ -319,6 +319,7 @@ export default function QServerPanel({ proxyUrl, serverUrl: _serverUrl, onStatus
   const [runningItem, setRunningItem] = useState<QueueItem | null>(null);
   const [history, setHistory] = useState<QueueItem[]>([]);
   const [allowedPlans, setAllowedPlans] = useState<AllowedPlan[]>([]);
+  const [authError, setAuthError] = useState(false);
 
   // Add / edit item form
   const [selectedPlan, setSelectedPlan] = useState('');
@@ -404,6 +405,7 @@ export default function QServerPanel({ proxyUrl, serverUrl: _serverUrl, onStatus
       ? { method: 'POST', headers, body: JSON.stringify(body) }
       : { method: 'GET', headers };
     const r = await fetch(`${proxyUrl}${path}`, opts);
+    if (r.status === 401) throw new Error('HTTP 401');
     if (!r.ok) throw new Error(`HTTP ${r.status}`);
     return r.json();
   }, [proxyUrl]);
@@ -412,26 +414,30 @@ export default function QServerPanel({ proxyUrl, serverUrl: _serverUrl, onStatus
   const refresh = useCallback(async () => {
     try {
       const [st, q, h, runs] = await Promise.all([
-        api('/api/status').catch(() => null),
-        api('/api/queue/get').catch(() => null),
-        api('/api/history/get').catch(() => null),
-        api('/api/re/runs', {}).catch(() => null),
+        api('/api/status'),
+        api('/api/queue/get').catch((e: Error) => { if (e.message === 'HTTP 401') throw e; return null; }),
+        api('/api/history/get').catch((e: Error) => { if (e.message === 'HTTP 401') throw e; return null; }),
+        api('/api/re/runs', {}).catch((e: Error) => { if (e.message === 'HTTP 401') throw e; return null; }),
       ]);
+      setAuthError(false);
       if (st) setStatus(st);
       if (q) {
         setQueue(q.items ?? []);
         setRunningItem(q.running_item?.item_uid ? q.running_item : null);
       }
       if (h) setHistory([...(h.items ?? [])].reverse());
-setReRuns(runs ?? null);
-    } catch { /* ignore */ }
+      setReRuns(runs ?? null);
+    } catch (e) {
+      if (e instanceof Error && e.message === 'HTTP 401') setAuthError(true);
+    }
   }, [api]);
 
   useEffect(() => {
+    if (authError) return;
     refresh();
     const id = setInterval(refresh, 2000);
     return () => clearInterval(id);
-  }, [refresh]);
+  }, [refresh, authError]);
 
   // ── Allowed plans ────────────────────────────────────────────────────────
   useEffect(() => {
@@ -1114,7 +1120,11 @@ setReRuns(runs ?? null);
               </div>
               <div className="flex-1 overflow-y-auto bg-white p-4">
 
-            {allowedPlans.length === 0 ? (
+            {authError ? (
+              <p className="text-xs text-red-500 font-medium">
+                401 Unauthorized — please enter API key.
+              </p>
+            ) : allowedPlans.length === 0 ? (
               <p className="text-xs text-gray-400">
                 {status ? 'No plans available — check QServer URL.' : 'Connect to a queue server to add plans.'}
               </p>

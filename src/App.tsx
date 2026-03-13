@@ -213,7 +213,7 @@ export default function App() {
   };
   const [splitQsWidth, setSplitQsWidth] = useState(() => Math.round(window.innerWidth * 0.45));
   const [qsInputUrl, setQsInputUrl] = useState(loadQsUrl);
-  const [qsInputApiKey] = useState(() => localStorage.getItem('qsApiKey') ?? '');
+  const [qsInputApiKey, setQsInputApiKey] = useState(() => localStorage.getItem('qsApiKey') ?? '');
   const [qsProxyUrl, setQsProxyUrl] = useState(() => toQsProxyUrl(loadQsUrl()));
   const [recentQsServers, setRecentQsServers] = useState<string[]>(loadRecentQsServers);
   const [showQsDropdown, setShowQsDropdown] = useState(false);
@@ -808,6 +808,15 @@ export default function App() {
                 </div>
               )}
             </div>
+            <label className="text-sky-300 text-xs font-medium shrink-0">API Key</label>
+            <input
+              type="password"
+              className="bg-sky-900 text-white font-mono text-xs px-2 py-1.5 rounded border border-sky-700 focus:outline-none focus:border-sky-400 placeholder:text-sky-500 w-32 shrink-0"
+              value={qsInputApiKey}
+              onChange={e => setQsInputApiKey(e.target.value)}
+              onKeyDown={e => { if (e.key === 'Enter') handleQsConnect(); }}
+              placeholder="(none)"
+            />
             <button onClick={() => handleQsConnect()} className="shrink-0 bg-sky-600 hover:bg-sky-500 active:bg-sky-700 text-white text-xs px-3 py-1.5 rounded font-medium transition-colors">Connect</button>
             {qsConnectStatus === 'connecting' && <span className="shrink-0 flex items-center gap-1.5 text-xs text-sky-300"><span className="w-2 h-2 rounded-full bg-sky-400 animate-pulse" />Connecting…</span>}
             {qsConnectStatus === 'ok' && <span className="shrink-0 flex items-center gap-1.5 text-xs text-green-400"><span className="w-2 h-2 rounded-full bg-green-400" />Connected</span>}
@@ -962,6 +971,15 @@ export default function App() {
                   </div>
                 )}
               </div>
+              <label className="text-sky-300 text-xs font-medium shrink-0">API Key</label>
+              <input
+                type="password"
+                className="bg-sky-900 text-white font-mono text-xs px-2 py-1.5 rounded border border-sky-700 focus:outline-none focus:border-sky-400 placeholder:text-sky-500 w-32 shrink-0"
+                value={qsInputApiKey}
+                onChange={e => setQsInputApiKey(e.target.value)}
+                onKeyDown={e => { if (e.key === 'Enter') handleQsConnect(); }}
+                placeholder="(none)"
+              />
               <button onClick={() => handleQsConnect()} className="shrink-0 bg-sky-600 hover:bg-sky-500 active:bg-sky-700 text-white text-xs px-3 py-1.5 rounded font-medium transition-colors">Connect</button>
               {qsConnectStatus === 'connecting' && <span className="shrink-0 flex items-center gap-1.5 text-xs text-sky-300"><span className="w-2 h-2 rounded-full bg-sky-400 animate-pulse" />Connecting…</span>}
               {qsConnectStatus === 'ok' && <span className="shrink-0 flex items-center gap-1.5 text-xs text-green-400"><span className="w-2 h-2 rounded-full bg-green-400" />Connected</span>}
